@@ -1,4 +1,5 @@
 # .github/workflows/release.yml
+name: Compile and Release
 
 on:
   release:
@@ -7,6 +8,7 @@ on:
 jobs:
   release:
     name: release ${{ matrix.target }}
+    permissions: write-all
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
