@@ -2,7 +2,7 @@
 
 zstd-jsonl-filter uses zstd's stream decoder and rayon's parallelism to very efficiently decompress and filter gigantic datasets in memory. The goal is minimal I/O and memory usage. I uploaded this just in case there's another person out there who, for whatever reason, needs to efficiently go through terabytes of zstd compressed data which can be interpreted line-by-line.
 
-<img src=".\assets\explanation.svg" width="600"/>
+<img src=".\assets\explanation.png" width="600"/>
 
 \
 \
