@@ -55,26 +55,26 @@ By default zstd-jsonl-filter writes to a 100 MB buffer which you can adjust as n
 Say you had a couple billion ~~Destiny 2 PGCR sessions~~ log entires from your fortune 500 employer (please don't actually use it for that) which are neatly separated in smaller chunks and individually compressed with zstd. If you wanted to identify  ~~all instances of Team Scorched games~~ find suspicious patterns you'd have to temporarily store a decompressed version in ram or disk to filter all relevant entires. With zstd-jsonl-filter you can perform pattern matching without ever needing to hold the entire decompress version.
 
 To make these tasks easier you can adjust ``config.json`` with your needed parameters. You can define your own [regex terms](https://regex101.com/), or use ``^`` to match anything and decompress everything. If you need more substantial filtering you can simply expand this code to implement your own logic. Created files will follow the structure ``{output_path}{file_stem_without_extension}{output_suffix}{output_file_extension}``.
-```json
+```yaml
 {
-    // your input files, make sure to use slashes not backslashes
+    # your input files, make sure to use slashes not backslashes
     "input_path": "C:/Users/User/Documents/Destiny_PGCR/test/",
-    // where to store the output
+    # where to store the output
     "output_path": "C:/Users/User/Documents/Destiny_PGCR/test/",
-    // if the output should be compressed, overwrites output_file_extension when set to true
+    # if the output should be compressed, overwrites output_file_extension when set to true
     "output_as_zstd": true,
-    // the zstd compression level from 1-22, 0 means the default of 3
+    # the zstd compression level from 1-22, 0 means the default of 3
     "output_zstd_compression": 0,
-    // the suffix added to the filename e.g. 12000000000-12010000000_filtered
+    # the suffix added to the filename e.g. 12000000000-12010000000_filtered
     "output_suffix": "_filtered",
-    // the file extension to be used (zstd-jsonl-filter does not interpret of convert files!)
-    // e.g. 12000000000-12010000000_filtered.zst
+    # the file extension to be used (zstd-jsonl-filter does not interpret of convert files!)
+    # e.g. 12000000000-12010000000_filtered.zst
     "output_file_extension": ".zst",
-    // the regex pattern matching applied to a single line
+    # the regex pattern matching applied to a single line
     "regex_pattern": "\",\"mode\":62,\"",
-    // max number of threads used by rayon
+    # max number of threads used by rayon
     "max_threads": 0,
-    // max buffer limit, here 100 MB
+    # max buffer limit, here 100 MB
     "buffer_limit": 100000000
 }
 ```
