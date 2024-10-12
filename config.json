@@ -1,11 +1,11 @@
 {
-    "input_path": "C:/Users/User/Documents/Destiny_PGCR/test/",
-    "output_path": "C:/Users/User/Documents/Destiny_PGCR/test/",
-    "output_as_zstd": true,
+    "input_path": "./",
+    "output_path": "./",
+    "output_as_zstd": false,
     "output_zstd_compression": 0,
     "output_suffix": "_filtered",
-    "output_file_extension": ".zst",
-    "regex_pattern": "\",\"mode\":62,\"",
+    "output_file_extension": ".jsonl",
+    "regex_pattern": "your_regex_expression",
     "max_threads": 0,
     "buffer_limit": 100000000
 }

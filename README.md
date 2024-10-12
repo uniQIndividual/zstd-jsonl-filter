@@ -1,7 +1,11 @@
 # What this for?
 
-zstd-jsonl-filter uses zstd's stream decoder and rayon's parallelism to very efficiently decompress and filter gigantic datasets in memory. The goal is minimal I/O and memory usage. I uploaded this just in case there's another person out there that, for whatever reason, needs to efficiently go through terabytes of zstd compressed data which can be interpreted line-by-line.
+zstd-jsonl-filter uses zstd's stream decoder and rayon's parallelism to very efficiently decompress and filter gigantic datasets in memory. The goal is minimal I/O and memory usage. I uploaded this just in case there's another person out there who, for whatever reason, needs to efficiently go through terabytes of zstd compressed data which can be interpreted line-by-line.
 
+<img src=".\assets\explanation.svg" width="600"/>
+
+\
+\
 To be clear: zstd-jsonl-filter is mainly useful if
 
 - you have multiple zstd archives
@@ -43,7 +47,7 @@ Stream decompression drastically reduces the memory usage, however the number of
 
 Although zstd-jsonl-filter is usually CPU bound when reading from an NVMe, that can quickly change for other sources. Reading from network storage or hard drives can be a bottleneck. You can set ``max_threads`` to change the number of simultaneous file operations if that impacts your source medium.
 
-Write speeds depends on how many entires are filtered and your storage speed.
+Write speeds depends on how many entires are filtered, your storage speed and if compression is used.
 By default zstd-jsonl-filter writes to a 100 MB buffer which you can adjust as needed.
 
 # How you could use it
@@ -53,14 +57,24 @@ Say you had a couple billion ~~Destiny 2 PGCR sessions~~ log entires from your f
 To make these tasks easier you can adjust ``config.json`` with your needed parameters. You can define your own [regex terms](https://regex101.com/), or use ``^`` to match anything and decompress everything. If you need more substantial filtering you can simply expand this code to implement your own logic. Created files will follow the structure ``{output_path}{file_stem_without_extension}{output_suffix}{output_file_extension}``.
 ```json
 {
+    // your input files, make sure to use slashes not backslashes
     "input_path": "C:/Users/User/Documents/Destiny_PGCR/test/",
+    // where to store the output
     "output_path": "C:/Users/User/Documents/Destiny_PGCR/test/",
+    // if the output should be compressed, overwrites output_file_extension when set to true
     "output_as_zstd": true,
+    // the zstd compression level from 1-22, 0 means the default of 3
     "output_zstd_compression": 0,
+    // the suffix added to the filename e.g. 12000000000-12010000000_filtered
     "output_suffix": "_filtered",
+    // the file extension to be used (zstd-jsonl-filter does not interpret of convert files!)
+    // e.g. 12000000000-12010000000_filtered.zst
     "output_file_extension": ".zst",
+    // the regex pattern matching applied to a single line
     "regex_pattern": "\",\"mode\":62,\"",
+    // max number of threads used by rayon
     "max_threads": 0,
+    // max buffer limit, here 100 MB
     "buffer_limit": 100000000
 }
 ```
