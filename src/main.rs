@@ -11,11 +11,14 @@ use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use zstd::stream::read::Decoder;
+use zstd::stream::write::Encoder;
 
 #[derive(Serialize, Deserialize)]
 struct Config {
     input_path: String,
     output_path: String,
+    output_as_zstd: bool,
+    output_zstd_compression: i32,
     output_suffix: String,
     output_file_extension: String,
     regex_pattern: String,
@@ -123,8 +126,21 @@ fn read_lines(file_path: &Path, config: &Config) -> std::io::Result<()> {
     }
 
     let output_file = File::create(output_file_path)?;
-
     let mut writer = BufWriter::new(output_file);
+
+    // Function to handle output either (compressed or uncompressed)
+    let mut write_to_output = |data: &[u8]| -> std::io::Result<()> {
+        if config.output_as_zstd {
+            // Use a ZSTD encoder to write compressed data
+            let mut encoder = Encoder::new(writer.by_ref(), config.output_zstd_compression)?;
+            encoder.write_all(data)?;
+            encoder.finish()?;
+        } else {
+            // Write uncompressed data directly
+            writer.write_all(data)?;
+        }
+        Ok(())
+    };
 
     if let Ok(lines) = decompress_lines(file_path) {
         for line in lines {
@@ -143,7 +159,7 @@ fn read_lines(file_path: &Path, config: &Config) -> std::io::Result<()> {
 
                     // If the buffer size exceeds the limit, flush it to the output file
                     if buffer.len() >= config.buffer_limit {
-                        flush_buffer(&mut buffer, &mut writer).unwrap();
+                        flush_buffer(&mut buffer, &mut write_to_output).unwrap();
                     }
                 }
             } else {
@@ -158,16 +174,13 @@ fn read_lines(file_path: &Path, config: &Config) -> std::io::Result<()> {
 
     // Flush any remaining data in the buffer to the output file
     if !buffer.is_empty() {
-        flush_buffer(&mut buffer, &mut writer)?;
+        flush_buffer(&mut buffer, &mut write_to_output)?;
     }
 
     // Write the last matching line without an extra newline
     if let Some(last_line) = last_matching_line {
-        writer.write_all(last_line.as_bytes())?;
+        write_to_output(last_line.as_bytes())?;
     }
-
-    // Ensure the writer flushes remaining buffered data
-    writer.flush()?;
 
     Ok(())
 }
@@ -183,8 +196,11 @@ where
     Ok(BufReader::new(decoder).lines())
 }
 
-fn flush_buffer(buffer: &mut Vec<u8>, writer: &mut BufWriter<File>) -> std::io::Result<()> {
-    writer.write_all(&buffer)?; // Write the buffer content to the file
+fn flush_buffer(
+    buffer: &mut Vec<u8>,
+    write_to_output: &mut impl FnMut(&[u8]) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    write_to_output(&buffer)?; // Write the buffer content to the output
     buffer.clear(); // Clear the buffer after writing
     Ok(())
 }
@@ -198,16 +214,26 @@ fn generate_output_filename(input_file_path: &str, config: &Config) -> String {
         .file_stem()
         .unwrap()
         .to_string_lossy(); // Get only base file name if applicable, i.e. "13030000000-13040000000"
-    format!(
-        "{}{file_stem_without_extension}{}{}",
-        config.output_path, config.output_suffix, config.output_file_extension
-    )
+    if config.output_as_zstd {
+        // ignore output_file_extension and set .zst
+        format!(
+            "{}{file_stem_without_extension}{}.zst",
+            config.output_path, config.output_suffix
+        )
+    } else {
+        format!(
+            "{}{file_stem_without_extension}{}{}",
+            config.output_path, config.output_suffix, config.output_file_extension
+        )
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ConfigFile {
     input_path: Option<String>,
     output_path: Option<String>,
+    output_as_zstd: Option<bool>,
+    output_zstd_compression: Option<i32>,
     output_suffix: Option<String>,
     output_file_extension: Option<String>,
     regex_pattern: Option<String>,
@@ -219,6 +245,8 @@ fn load_config(config_path: &str) -> Config {
     // Fallback values if no config file was found
     let input_path = String::from("./"); // directory where to search for zstd files
     let output_path = String::from("./"); // directory where to write files to
+    let output_as_zstd = false; // by default extract everything
+    let output_zstd_compression = 0; // zstd compression level between 1-22, 0 means the default of 3
     let output_suffix = String::from("_filtered"); // suffix for your output file
     let output_file_extension = String::from(".jsonl"); // suffix for your output file
     let regex_pattern = String::from(r#"^"#); // match everything
@@ -231,6 +259,10 @@ fn load_config(config_path: &str) -> Config {
             return Config {
                 input_path: config.input_path.unwrap_or(input_path),
                 output_path: config.output_path.unwrap_or(output_path),
+                output_as_zstd: config.output_as_zstd.unwrap_or(output_as_zstd),
+                output_zstd_compression: config
+                    .output_zstd_compression
+                    .unwrap_or(output_zstd_compression),
                 output_suffix: config.output_suffix.unwrap_or(output_suffix),
                 output_file_extension: config
                     .output_file_extension
@@ -251,6 +283,8 @@ fn load_config(config_path: &str) -> Config {
     Config {
         input_path: input_path,
         output_path: output_path,
+        output_as_zstd: output_as_zstd,
+        output_zstd_compression: output_zstd_compression,
         output_suffix: output_suffix,
         output_file_extension: output_file_extension,
         regex_pattern: regex_pattern,

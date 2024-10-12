@@ -55,14 +55,16 @@ To make these tasks easier you can adjust ``config.json`` with your needed param
 {
     "input_path": "C:/Users/User/Documents/Destiny_PGCR/test/",
     "output_path": "C:/Users/User/Documents/Destiny_PGCR/test/",
-    "output_suffix": "_scorch",
-    "output_file_extension": ".jsonl",
+    "output_as_zstd": true,
+    "output_zstd_compression": 0,
+    "output_suffix": "_filtered",
+    "output_file_extension": ".zst",
     "regex_pattern": "\",\"mode\":62,\"",
     "max_threads": 0,
     "buffer_limit": 100000000
 }
 ```
-This examples filters all entires for ``","mode":62"`` and writes them to a file called ``{file}_scorch.jsonl``, 
+This examples filters all entires for ``","mode":62"`` (the mode identifier for Team Scorched) and writes them to a compressed file called ``{file}_filtered.zst``. If you wish to keep an uncompressed version set ``output_as_zstd`` to ``false``.
 
 Without ``config.json`` zstd-jsonl-filter will default back to extracting every .zst archive in the current directory without filtering any lines.
 
