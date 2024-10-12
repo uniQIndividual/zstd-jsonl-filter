@@ -1,0 +1,9 @@
+{
+    "input_path": "C:/Users/User/Documents/Destiny_PGCR/test/",
+    "output_path": "C:/Users/User/Documents/Destiny_PGCR/test/",
+    "output_suffix": "_filtered",
+    "output_file_extension": ".jsonl",
+    "regex_pattern": "\",\"mode\":62,\"",
+    "max_threads": 0,
+    "buffer_limit": 100000000
+}
