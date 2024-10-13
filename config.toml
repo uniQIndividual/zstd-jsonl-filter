@@ -1,0 +1,20 @@
+# You can configure zstd-jsonl-filter here
+# Check https://github.com/uniQIndividual/zstd-jsonl-filter for the documentation
+
+# Input Parameters
+input = './'
+
+# Output Parameters
+output = './'
+zstd = false
+compression_level = 0
+suffix = "_filtered"
+file_extension = ".jsonl"
+
+# Regex Filter
+pattern = '^'
+
+# Performance
+threads = 0
+buffer = 100000000
+quiet = false

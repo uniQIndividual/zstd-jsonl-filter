@@ -22,7 +22,7 @@ To be clear: zstd-jsonl-filter is mainly useful if
 Say you had a couple billion ~~Destiny 2 PGCR sessions~~ log entires from your fortune 500 employer (please don't actually use it for that) which are neatly separated in smaller chunks and compressed with zstd. If you wanted to extract only relevant entries  ~~( e.g. all Team Scorched matches)~~ you'd have to temporarily store a decompressed version in ram or disk to filter them. With zstd-jsonl-filter you can perform these pattern matching without ever needing to hold the entire file.
 
 1. Build zstd-jsonl-filter or download [the latest release](https://github.com/uniQIndividual/zstd-jsonl-filter/releases/latest)
-2. Open ``config.json`` and set your parameters (see [this section](https://github.com/uniQIndividual/zstd-jsonl-filter#what-this-for) for more details)
+2. Open ``config.json`` and set your parameters (see [this section](https://github.com/uniQIndividual/zstd-jsonl-filter#options) for more details)
 3. Make sure your data is in the following format (i.e. no tar): 
 ```
 input_path
@@ -39,42 +39,67 @@ The names are irrelevant, but zstd-jsonl-filter does not support multiple files 
 4. Run zstd-jsonl-filter
 
 
-# Parameters in config.json
+# Options
 
-To make these tasks easier you can adjust ``config.json`` with your needed parameters. You can define your own [regex terms](https://regex101.com/), or use ``^`` to match anything and decompress everything. If you need more substantial filtering you can simply expand this code to implement your own logic. Created files will follow the structure ``{output_path}original_filename_without_extension{output_suffix}{output_file_extension}``.
+You can launch zstd-jsonl-filter
 
-## Here is a full list:
+- with command line parameters (will take priority over the config file)
+- with the included config.toml file
+
+Also see [practical examples](https://github.com/uniQIndividual/zstd-jsonl-filter#practical-example)
+
+You usually want to include a [regex term](https://regex101.com/) to filter the output and make zstd-jsonl-filter more than a decoder.
+You can supply it with ``--pattern`` or in ``config.toml``. If you need more substantial filtering you can fork this code to implement your own logic. I might look into ways to make more powerful filtering in the future.
+
+Created files will follow the structure ``{output_path}original_filename_without_extension{output_suffix}{output_file_extension}``.
+
+## All parameters
 
 | Parameter      | Description      | Default |
 | ------------- | ------------- | ------------- |
-| input_path | The path where your .zst files are located.<br>Make sure to use ``/`` slashes not ``\`` backslashes! | ``./``
-| output_path | Where the output should be stored | ``./`` current directory |
-| output_as_zstd | Whether the output should be stored as a compressed .zst file. ``true`` will overwrite ``output_file_extension`` | ``false`` no zstd compression |
-| output_zstd_compression | The zstd compression level from 1 (fastest) - 22 (smallest) | ``0`` normal |
-| output_suffix | Name to be appended to output files. Will generate e.g.<br>``12000000000-12010000000_filtered.zst`` | ``_filtered`` |
-| output_file_extension | The file extension for extracted files. Will be ignored if ``output_as_zstd`` is set to ``true`` | ``.jsonl`` |
-| regex_pattern | The regex pattern to be applied line-by-line. A match means the line will be included in the output. The regex needs to be escaped for JSON e.g. ``"\",\"mode\":62,\""`` | ``^`` matches everything |
-| max_threads | The maximum number of threads used by rayon. Since each thread reads from one file, changing this number also affects I/O.  | ``0`` unlimited |
-| buffer_limit | The maximum buffer per thread before matches lines are written to disk. That means e.g. 24 threads x 100 MB buffer means up to 2.4 GB of memory can be used for buffering. | ``100000000`` 100 MB |
+| ``--config`` | Point zstd-jsonl-filter to the config file. | ``config.toml`` in the same folder |
+| ``--input`` | The path where your .zst files are located.<br>Both ``/`` slashes and ``\`` backslashes work. | ``./`` current folder
+| ``--output`` | Where the output files should be stored. | ``./`` current folder. |
+| ``--zstd`` | Whether the output should be stored as a compressed .zst file. ``true`` will overwrite ``output_file_extension``. | ``false`` no zstd compression. |
+| ``--compression-level`` | The zstd compression level from 1 (fastest) to 22 (smallest) | ``0`` use zstd default |
+| ``--suffix`` | Name to be appended to output files. Will generate e.g.<br>``12000000000-12010000000_filtered.zst``. | ``_filtered`` |
+| ``--file-extension`` | The file extension for extracted files. Will be ignored if ``output_as_zstd`` is set to ``true``. | ``.jsonl`` |
+| ``--pattern`` | The regex pattern to be applied line-by-line. A match means the line will be included in the output. Keep in mind that regex terms with special characters need to be escaped properly. | ``^`` matches everything |
+| ``--threads`` | The maximum number of threads used by rayon. Since each thread reads from one file, changing this number also affects I/O.  | ``0`` unlimited |
+| ``--buffer`` | The maximum buffer per thread before matches lines are written to disk. That means e.g. 24 threads x 100 MB buffer means up to 2.4 GB of memory can be used for buffering. | ``100000000`` 100 MB |
+|``--quiet``| Displays only the current progress and error messages | ``false`` |
 
-## Practical example
+## Practical examples
 
-```yaml
-{
-    "input_path": "C:/Users/User/Documents/Destiny_PGCR/test/",
-    "output_path": "C:/Users/User/Documents/Destiny_PGCR/test/",
-    "output_as_zstd": true,
-    "output_zstd_compression": 0,
-    "output_suffix": "_filtered",
-    "output_file_extension": ".zst",
-    "regex_pattern": "\",\"mode\":62,\"",
-    "max_threads": 0,
-    "buffer_limit": 100000000
-}
+### Using config.toml
+```toml
+# Input Parameters
+input = 'C:/Users/User/Documents/Destiny_PGCR/bungo-pgcr-12b/'
+
+# Output Parameters
+output = 'C:\Users\User\Documents\Destiny_PGCR\test' # backslashes also work
+zstd = false
+compression_level = 14
+suffix = "_scorch"
+file_extension = ".jsonl"
+
+# Regex Filter
+pattern = '","mode":62,"' # make sure to properly escape if needed
+
+# Performance
+threads = 0
+buffer = 100000000
+quiet = false
 ```
-This examples filters all entires for ``","mode":62"`` (in my use case the mode identifier for "Team Scorched") and writes them to a compressed file called ``{file}_filtered.zst``. If you wish to keep an uncompressed version set ``output_as_zstd`` to ``false``.
+This finds all Team Scorched matches in Destiny PGCRs by identifying ``","mode":62,"``. Make sure your source files are well defined and your regex terms are robust enough. It then writes them to uncompressed files called ``{file}_scorch.jsonl``. 
 
-Without ``config.json`` zstd-jsonl-filter will default back to extracting every .zst archive in the current directory without filtering any lines.
+### Using arguments
+```powershell
+.\zstd-jsonl-filter.exe --input \\10.0.0.2\D2_PGCR\bungo-pgcr-12b --output C:\Users\User\Documents\Destiny_PGCR\test --zstd --compression-level 14 --threads 2 --pattern '","mode":62,"' --quiet
+```
+This examples also finds all Team Scorched matches and writes them to compressed files called ``{file}_filtered.zst``. It is restricted to only 2 threads and only displays the current progress and important error messages.
+
+Without arguments or ``config.toml`` zstd-jsonl-filter will default back to extracting every .zst archive in the current directory without filtering any lines.
 
 
 # Performance
@@ -95,7 +120,7 @@ Stream decompression drastically reduces the memory usage, however the number of
 
 Although zstd-jsonl-filter is usually CPU bound when reading from an NVMe, that can quickly change for other sources. Reading from network storage or hard drives can be a bottleneck. You can set ``max_threads`` to change the number of simultaneous file operations if that impacts your source medium.
 
-Write speeds depends on how many entires are filtered, your storage speed and if compression is used.
+Write speeds depend on how many entries are filtered, your storage speed and if compression is used.
 By default zstd-jsonl-filter writes to a 100 MB buffer which you can adjust as needed.
 
 # Donate

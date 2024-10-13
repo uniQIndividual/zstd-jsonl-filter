@@ -3,12 +3,14 @@ use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Error as IoError, Lines, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
 use std::time::{Duration, Instant};
 
+use clap::Parser;
 use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use regex::Regex;
@@ -17,53 +19,40 @@ use zstd::compression_level_range;
 use zstd::stream::read::Decoder;
 use zstd::stream::write::Encoder;
 
-#[derive(Serialize, Deserialize)]
-struct Config {
-    input_path: String,
-    output_path: String,
-    output_as_zstd: bool,
-    output_zstd_compression: i32,
-    output_suffix: String,
-    output_file_extension: String,
-    regex_pattern: String,
-    max_threads: usize,
-    buffer_limit: usize,
-}
-
 fn main() -> Result<(), Box<dyn Error>> {
     let start_time = Instant::now();
-    // Attempt to read the config, otherwise use fallbacks
-    let mut config = load_config("config.json");
+    // Set up config parameters from cli, the config file and fallback values
+    let mut config = set_config();
 
     rayon::ThreadPoolBuilder::new()
-        .num_threads(config.max_threads)
+        .num_threads(config.threads)
         .build_global()
         .unwrap();
 
-    if !config.input_path.ends_with('/') {
-        config.input_path.push('/');
+    if !config.input.ends_with('/') {
+        config.input.push('/');
     }
-    if !PathBuf::from(&config.input_path).is_dir() {
+    if !PathBuf::from(&config.input).is_dir() {
         eprintln!(
             "Error: The input path '{:?}' is not a valid directory.",
-            &config.input_path
+            &config.input
         );
         std::process::exit(1);
     }
 
-    if !config.output_path.ends_with('/') {
-        config.output_path.push('/');
+    if !config.output.ends_with('/') {
+        config.output.push('/');
     }
-    if !PathBuf::from(&config.output_path).is_dir() {
+    if !PathBuf::from(&config.output).is_dir() {
         eprintln!(
             "Error: The output path '{:?}' is not a valid directory.",
-            &config.output_path
+            &config.output
         );
         std::process::exit(1);
     }
 
     // Find all .zst files in input_path
-    let zstd_files: Vec<_> = fs::read_dir(&config.input_path)?
+    let zstd_files: Vec<_> = fs::read_dir(&config.input)?
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
@@ -77,14 +66,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let total_files = zstd_files.len();
     let display_limit = 5;
-    println!("Found {} .zstd files:", total_files);
+    print_if_not_quiet(config.quiet, &format!("Found {} .zstd files:", total_files));
     for file in zstd_files.iter().take(display_limit) {
         if let Some(file_name) = file.file_name() {
-            println!("- {:?}", file_name);
+            print_if_not_quiet(config.quiet, &format!("- {:?}", file_name));
         }
     }
     if total_files > display_limit {
-        println!("...");
+        print_if_not_quiet(config.quiet, &format!("..."));
     }
 
     // Shared total counter for the total decompressed size
@@ -143,16 +132,22 @@ fn read_lines(
     if let Ok(metadata) = fs::metadata(file_path) {
         if metadata.len() == 0 {
             pb.suspend(|| {
-                println!(
-                    "Skipping empty file: {:?}",
-                    file_path.file_name().unwrap_or_default()
+                print_if_not_quiet(
+                    config.quiet,
+                    &format!(
+                        "Skipping empty file: {:?}",
+                        file_path.file_name().unwrap_or_default()
+                    ),
                 );
             });
             return Ok(());
         }
     } else {
         pb.suspend(|| {
-            eprintln!("Failed to get metadata for: {:?}", file_path);
+            print_if_not_quiet(
+                config.quiet,
+                &format!("Failed to get metadata for: {:?}", file_path),
+            );
         });
         return Ok(());
     }
@@ -163,9 +158,12 @@ fn read_lines(
     // Skip already existing existing files
     if Path::new(&output_file_path).exists() {
         pb.suspend(|| {
-            println!(
-                "Skipping existing output file {:?}",
-                Path::new(&output_file_path).file_name().unwrap_or_default()
+            print_if_not_quiet(
+                config.quiet,
+                &format!(
+                    "Skipping existing output file {:?}",
+                    Path::new(&output_file_path).file_name().unwrap_or_default()
+                ),
             );
         });
         return Ok(());
@@ -173,26 +171,26 @@ fn read_lines(
 
     // Verify if the file is not a Zstd archive containing a TAR
     if let Err(err) = verify_zstd_without_tar(file_path) {
-        pb.suspend(|| eprintln!("{}", err));
+        pb.suspend(|| print_if_not_quiet(config.quiet, &format!("{}", err)));
         return Ok(());
     }
 
     // In in-memory buffer for storing matching lines
-    let mut buffer: Vec<u8> = Vec::with_capacity(config.buffer_limit);
+    let mut buffer: Vec<u8> = Vec::with_capacity(config.buffer);
 
     // Track the last matching line to avoid trailing newline
     let mut last_matching_line: Option<String> = None;
 
-    let pattern = Regex::new(&config.regex_pattern.as_str()).unwrap();
+    let pattern = Regex::new(&config.pattern.as_str()).unwrap();
 
     let output_file = File::create(output_file_path)?;
     let mut writer = BufWriter::new(output_file);
 
     // Function to handle output either (compressed or uncompressed)
     let mut write_to_output = |data: &[u8]| -> std::io::Result<()> {
-        if config.output_as_zstd {
+        if config.zstd {
             // Use a ZSTD encoder to write compressed data
-            let mut encoder = Encoder::new(writer.by_ref(), config.output_zstd_compression)?;
+            let mut encoder = Encoder::new(writer.by_ref(), config.compression_level)?;
             encoder.write_all(data)?;
             encoder.finish()?;
         } else {
@@ -235,7 +233,7 @@ fn read_lines(
                     last_matching_line = Some(line.to_string());
 
                     // If the buffer size exceeds the limit, flush it to the output file
-                    if buffer.len() >= config.buffer_limit {
+                    if buffer.len() >= config.buffer {
                         flush_buffer(&mut buffer, &mut write_to_output).unwrap();
                     }
                 }
@@ -292,16 +290,16 @@ fn generate_output_filename(input_file_path: &str, config: &Config) -> String {
         .file_stem()
         .unwrap()
         .to_string_lossy(); // Get only base file name if applicable, i.e. "13030000000-13040000000"
-    if config.output_as_zstd {
+    if config.zstd {
         // ignore output_file_extension and set .zst
         format!(
             "{}{file_stem_without_extension}{}.zst",
-            config.output_path, config.output_suffix
+            config.output, config.suffix
         )
     } else {
         format!(
             "{}{file_stem_without_extension}{}{}",
-            config.output_path, config.output_suffix, config.output_file_extension
+            config.output, config.suffix, config.file_extension
         )
     }
 }
@@ -337,78 +335,177 @@ fn verify_zstd_without_tar(file_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct ConfigFile {
-    input_path: Option<String>,
-    output_path: Option<String>,
-    output_as_zstd: Option<bool>,
-    output_zstd_compression: Option<i32>,
-    output_suffix: Option<String>,
-    output_file_extension: Option<String>,
-    regex_pattern: Option<String>,
-    max_threads: Option<usize>,
-    buffer_limit: Option<usize>,
+/// Command line argument structure
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Rust Configuration Demo", long_about = None)]
+struct Cli {
+    #[arg(long = "input")]
+    input: Option<String>,
+    #[arg(long = "output")]
+    output: Option<String>,
+    #[arg(long = "zstd")]
+    zstd: bool,
+    #[arg(long = "compression-level")]
+    compression_level: Option<i32>,
+    #[arg(long = "suffix")]
+    suffix: Option<String>,
+    #[arg(long = "file-extension")]
+    file_extension: Option<String>,
+    #[arg(long = "pattern")]
+    pattern: Option<String>,
+    #[arg(long = "threads")]
+    threads: Option<usize>,
+    #[arg(long = "buffer")]
+    buffer: Option<usize>,
+    #[arg(long = "quiet")]
+    quiet: bool,
+    #[arg(long = "config", default_value = "config.toml")]
+    config: String,
 }
 
-fn load_config(config_path: &str) -> Config {
-    // Fallback values if no config file was found
-    let input_path = String::from("./"); // directory where to search for zstd files
-    let output_path = String::from("./"); // directory where to write files to
-    let output_as_zstd = false; // by default extract everything
-    let output_zstd_compression = 0; // zstd compression level between 1-22, 0 means the default of 3
-    let output_suffix = String::from("_filtered"); // suffix for your output file
-    let output_file_extension = String::from(".jsonl"); // suffix for your output file
-    let regex_pattern = String::from(r#"^"#); // match everything
-    let max_threads = 0; // max number of threads rayon spawn, 0 means no limit
-    let buffer_limit = 100 * 1024 * 1024; // the buffer size after which data is written to disk, here: 100MB
+// Internal and config.toml structure
+#[derive(Serialize, Deserialize)]
+struct Config {
+    input: String,
+    output: String,
+    zstd: bool,
+    compression_level: i32,
+    suffix: String,
+    file_extension: String,
+    pattern: String,
+    threads: usize,
+    buffer: usize,
+    quiet: bool,
+}
 
-    // Verify valid zstd compression level range
-    fn verify_compression_level(level: i32) -> i32 {
-        if compression_level_range().contains(&level) {
-            level
-        } else {
-            0
-        }
+fn validate_regex(pattern: &str) -> Result<Regex, String> {
+    Regex::new(pattern).map_err(|e| format!("Invalid regex: {}", e))
+}
+
+/// Check --quiet before printing
+fn print_if_not_quiet(quiet: bool, message: &str) {
+    if !quiet {
+        println!("{}", message);
     }
+}
 
-    if let Ok(file) = File::open(config_path) {
-        let reader = BufReader::new(file);
-        if let Ok(config) = serde_json::from_reader::<_, ConfigFile>(reader) {
-            return Config {
-                input_path: config.input_path.unwrap_or(input_path),
-                output_path: config.output_path.unwrap_or(output_path),
-                output_as_zstd: config.output_as_zstd.unwrap_or(output_as_zstd),
-                output_zstd_compression: verify_compression_level(
-                    config
-                        .output_zstd_compression
-                        .unwrap_or(output_zstd_compression),
-                ),
-                output_suffix: config.output_suffix.unwrap_or(output_suffix),
-                output_file_extension: config
-                    .output_file_extension
-                    .unwrap_or(output_file_extension),
-                regex_pattern: config.regex_pattern.unwrap_or(regex_pattern),
-                max_threads: config.max_threads.unwrap_or(max_threads),
-                buffer_limit: config.buffer_limit.unwrap_or(buffer_limit),
-            };
-        } else {
-            println!("Failed to parse config file. Using default values.");
+fn set_config() -> Config {
+    // Fallback values if no config file was found
+    let fallback_input = String::from("./"); // directory where to search for zstd files
+    let fallback_output = String::from("./"); // directory where to write files to
+    let fallback_zstd = false; // by default extract everything
+    let fallback_compression_level = 0; // zstd compression level between 1-22, 0 means the default of 3
+    let fallback_suffix = String::from("_filtered"); // suffix for your output file
+    let fallback_file_extension = String::from(".jsonl"); // suffix for your output file
+    let fallback_pattern = String::from(r#"^"#); // match everything
+    let fallback_threads = 0; // max number of threads rayon spawn, 0 means no limit
+    let fallback_buffer = 100000000; // the buffer size after which data is written to disk, here: 100MB
+    let fallback_quiet = false;
+
+    // Parse command-line arguments.
+    let cli = Cli::parse();
+
+    // Attempt to read the config file
+    let config: Option<Config> = if Path::new(&cli.config).exists() {
+        match fs::read_to_string(&cli.config) {
+            Ok(content) => toml::from_str(&content).ok(),
+            Err(e) => {
+                eprintln!("Failed to read config file: {}", e);
+                process::exit(1);
+            }
         }
     } else {
-        println!(
-            "Config file '{}' not found. Using default values.",
-            config_path
-        );
-    }
+        None
+    };
+
+    // Input path.
+    let input = cli
+        .input
+        .or_else(|| Some(config.as_ref()?.input.clone()))
+        .unwrap_or_else(|| fallback_input);
+
+    // Output path
+    let output = cli
+        .output
+        .or_else(|| Some(config.as_ref()?.output.clone()))
+        .unwrap_or_else(|| fallback_output);
+
+    // Use zstd compression in output
+    let zstd = cli.zstd
+        || config
+            .as_ref()
+            .and_then(|c| Some(c.zstd))
+            .unwrap_or(fallback_zstd);
+
+    // Zstd compression level
+    let mut compression_level = cli
+        .compression_level
+        .or_else(|| Some(config.as_ref()?.compression_level.clone()))
+        .unwrap_or_else(|| fallback_compression_level);
+
+    // Output file suffix
+    let suffix = cli
+        .suffix
+        .or_else(|| Some(config.as_ref()?.suffix.clone()))
+        .unwrap_or_else(|| fallback_suffix);
+
+    // Output file extension
+    let file_extension = cli
+        .file_extension
+        .or_else(|| Some(config.as_ref()?.file_extension.clone()))
+        .unwrap_or_else(|| fallback_file_extension);
+
+    // Regex pattern.
+    let pattern = cli
+        .pattern
+        .or_else(|| Some(config.as_ref()?.pattern.clone()))
+        .unwrap_or_else(|| fallback_pattern);
+
+    // Max threads.
+    let threads = cli
+        .threads
+        .or_else(|| Some(config.as_ref()?.threads.clone()))
+        .unwrap_or_else(|| fallback_threads);
+
+    // Max buffer size
+    let buffer = cli
+        .buffer
+        .or_else(|| Some(config.as_ref()?.buffer.clone()))
+        .unwrap_or_else(|| fallback_buffer);
+
+    // Mute most announcements
+    let quiet = cli.quiet
+        || config
+            .as_ref()
+            .and_then(|c| Some(c.quiet))
+            .unwrap_or(fallback_quiet);
+
+    // Validate the regex pattern.
+    let _ = match validate_regex(&pattern) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{}", e);
+            process::exit(1);
+        }
+    };
+
+    // Verify valid zstd compression level range
+    compression_level = if compression_level_range().contains(&compression_level) {
+        compression_level
+    } else {
+        0
+    };
+
     Config {
-        input_path: input_path,
-        output_path: output_path,
-        output_as_zstd: output_as_zstd,
-        output_zstd_compression: output_zstd_compression,
-        output_suffix: output_suffix,
-        output_file_extension: output_file_extension,
-        regex_pattern: regex_pattern,
-        max_threads: max_threads,
-        buffer_limit: buffer_limit,
+        input: input,
+        output: output,
+        zstd: zstd,
+        compression_level: compression_level,
+        suffix: suffix,
+        file_extension: file_extension,
+        pattern: pattern,
+        threads: threads,
+        buffer: buffer,
+        quiet: quiet,
     }
 }
