@@ -1,15 +1,19 @@
 use std::error::Error;
 use std::fs;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Error as IoError, Lines, Write};
+use std::io::{BufRead, BufReader, BufWriter, Error as IoError, Lines, Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
+use std::time::{Duration, Instant};
 
-use indicatif::ProgressBar;
-use indicatif::ProgressStyle;
+use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use zstd::compression_level_range;
 use zstd::stream::read::Decoder;
 use zstd::stream::write::Encoder;
 
@@ -27,7 +31,7 @@ struct Config {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let now = Instant::now();
+    let start_time = Instant::now();
     // Attempt to read the config, otherwise use fallbacks
     let mut config = load_config("config.json");
 
@@ -83,29 +87,95 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("...");
     }
 
+    // Shared total counter for the total decompressed size
+    let total_decompressed_size = Arc::new(AtomicUsize::new(0));
+
     // progress bar
     let pb = ProgressBar::new(zstd_files.len() as u64);
     pb.set_style(
         ProgressStyle::with_template(
-            "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} ({eta}) {msg}",
+            "{spinner:.cyan} [{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({eta}) {msg}",
         )
         .unwrap()
         .progress_chars("#>-"),
     );
+    pb.enable_steady_tick(Duration::from_millis(100));
 
     // Start a file operation for every available thread
     zstd_files.par_iter().for_each(|file_path| {
-        let _ = read_lines(&file_path, &config);
+        let _ = read_lines(
+            &file_path,
+            &config,
+            &pb,
+            Arc::clone(&total_decompressed_size),
+            start_time,
+        );
         pb.inc(1);
     });
 
-    pb.finish_with_message("All files processed.");
-    println!("Total time elapsed: {:.2?}s", now.elapsed().as_secs());
+    //pb.finish_with_message("All files processed.");
+    pb.finish();
+    println!("All files processed.");
+    /*
+    let final_size = total_decompressed_size.load(Ordering::SeqCst);
+    println!(
+        "Total time elapsed: {:.2?}s",
+        start_time.elapsed().as_secs()
+    );
+    println!("Total size processed: {}", HumanBytes(final_size as u64));
+    println!(
+        "Average processing speed: {}/s",
+        HumanBytes(final_size as u64 / start_time.elapsed().as_secs())
+    );*/
     Ok(())
 }
 
-fn read_lines(file_path: &Path, config: &Config) -> std::io::Result<()> {
+fn read_lines(
+    file_path: &Path,
+    config: &Config,
+    pb: &ProgressBar,
+    total_decompressed_size: Arc<AtomicUsize>,
+    start_time: Instant,
+) -> std::io::Result<()> {
     // Operates on a single zstd file decompressing it line by line
+
+    // Skip if input file is empty
+    if let Ok(metadata) = fs::metadata(file_path) {
+        if metadata.len() == 0 {
+            pb.suspend(|| {
+                println!(
+                    "Skipping empty file: {:?}",
+                    file_path.file_name().unwrap_or_default()
+                );
+            });
+            return Ok(());
+        }
+    } else {
+        pb.suspend(|| {
+            eprintln!("Failed to get metadata for: {:?}", file_path);
+        });
+        return Ok(());
+    }
+
+    let output_file_path =
+        generate_output_filename(&file_path.to_string_lossy().to_string(), &config);
+
+    // Skip already existing existing files
+    if Path::new(&output_file_path).exists() {
+        pb.suspend(|| {
+            println!(
+                "Skipping existing output file {:?}",
+                Path::new(&output_file_path).file_name().unwrap_or_default()
+            );
+        });
+        return Ok(());
+    }
+
+    // Verify if the file is not a Zstd archive containing a TAR
+    if let Err(err) = verify_zstd_without_tar(file_path) {
+        pb.suspend(|| eprintln!("{}", err));
+        return Ok(());
+    }
 
     // In in-memory buffer for storing matching lines
     let mut buffer: Vec<u8> = Vec::with_capacity(config.buffer_limit);
@@ -114,16 +184,6 @@ fn read_lines(file_path: &Path, config: &Config) -> std::io::Result<()> {
     let mut last_matching_line: Option<String> = None;
 
     let pattern = Regex::new(&config.regex_pattern.as_str()).unwrap();
-    let output_file_path =
-        generate_output_filename(&file_path.to_string_lossy().to_string(), &config);
-
-    if Path::new(&output_file_path).exists() {
-        println!(
-            "Output file '{}' already exists. Skipping...",
-            output_file_path
-        );
-        return Ok(());
-    }
 
     let output_file = File::create(output_file_path)?;
     let mut writer = BufWriter::new(output_file);
@@ -142,9 +202,26 @@ fn read_lines(file_path: &Path, config: &Config) -> std::io::Result<()> {
         Ok(())
     };
 
-    if let Ok(lines) = decompress_lines(file_path) {
+    // Using https://stackoverflow.com/questions/77304382/how-to-decode-and-read-a-zstd-file-in-rust
+    fn a(
+        reader: BufReader<Decoder<'static, BufReader<File>>>,
+    ) -> Result<Lines<BufReader<Decoder<'static, BufReader<File>>>>, IoError> {
+        Ok(reader.lines())
+    }
+    let file = File::open(file_path)?;
+
+    let decoder = Decoder::new(file)?;
+    let reader = BufReader::new(decoder);
+
+    // Measure the size of decompressed data
+    let mut decompressed_size = 0;
+
+    // : Result<Lines<BufReader<Decoder<'static, BufReader<File>>>>, IoError>
+    if let Ok(lines) = a(reader) {
         for line in lines {
             if let Ok(line) = line {
+                decompressed_size += line.len();
+
                 // Test regex pattern
                 // This is the place to add new line-by-line logic
                 if pattern.is_match(&line) {
@@ -172,6 +249,18 @@ fn read_lines(file_path: &Path, config: &Config) -> std::io::Result<()> {
         }
     }
 
+    total_decompressed_size.fetch_add(decompressed_size, Ordering::SeqCst);
+    let current_size = total_decompressed_size.load(Ordering::SeqCst);
+    let mut start_time = start_time.elapsed().as_secs();
+    if start_time == 0 {
+        start_time += 1;
+    }
+    pb.set_message(format!(
+        "@ {}/s, Total: {}",
+        HumanBytes(current_size as u64 / start_time),
+        HumanBytes(current_size as u64)
+    ));
+
     // Flush any remaining data in the buffer to the output file
     if !buffer.is_empty() {
         flush_buffer(&mut buffer, &mut write_to_output)?;
@@ -183,17 +272,6 @@ fn read_lines(file_path: &Path, config: &Config) -> std::io::Result<()> {
     }
 
     Ok(())
-}
-
-// Using https://stackoverflow.com/questions/77304382/how-to-decode-and-read-a-zstd-file-in-rust
-fn decompress_lines(
-    filename: &Path,
-) -> Result<Lines<BufReader<Decoder<'static, BufReader<File>>>>, IoError>
-where
-{
-    let file = File::open(filename)?;
-    let decoder = Decoder::new(file)?;
-    Ok(BufReader::new(decoder).lines())
 }
 
 fn flush_buffer(
@@ -228,6 +306,37 @@ fn generate_output_filename(input_file_path: &str, config: &Config) -> String {
     }
 }
 
+// Verify that the file is a valid zstd file and contains no tar
+fn verify_zstd_without_tar(file_path: &Path) -> Result<(), String> {
+    let mut file = File::open(file_path).map_err(|e| format!("Failed to open file: {}", e))?;
+
+    // Read the first few bytes to detect Zstd magic number
+    let mut magic_bytes = [0u8; 4];
+    file.read_exact(&mut magic_bytes).map_err(|_| {
+        format!(
+            "Skipped not valid zstd {:?}",
+            file_path.file_name().unwrap_or_default()
+        )
+    })?;
+
+    // Check if the magic bytes match Zstd's magic number
+    if magic_bytes == [0x28, 0xB5, 0x2F, 0xFD] {
+        // It's a Zstd archive; attempt to decompress it
+        let _ = Decoder::new(file).map_err(|_| {
+            format!(
+                "Failed to decode zstd for {:?}",
+                file_path.file_name().unwrap_or_default()
+            )
+        })?;
+    } else {
+        return Err(format!(
+            "Skipped not valid zstd {:?}",
+            file_path.file_name().unwrap_or_default()
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 struct ConfigFile {
     input_path: Option<String>,
@@ -253,6 +362,15 @@ fn load_config(config_path: &str) -> Config {
     let max_threads = 0; // max number of threads rayon spawn, 0 means no limit
     let buffer_limit = 100 * 1024 * 1024; // the buffer size after which data is written to disk, here: 100MB
 
+    // Verify valid zstd compression level range
+    fn verify_compression_level(level: i32) -> i32 {
+        if compression_level_range().contains(&level) {
+            level
+        } else {
+            0
+        }
+    }
+
     if let Ok(file) = File::open(config_path) {
         let reader = BufReader::new(file);
         if let Ok(config) = serde_json::from_reader::<_, ConfigFile>(reader) {
@@ -260,9 +378,11 @@ fn load_config(config_path: &str) -> Config {
                 input_path: config.input_path.unwrap_or(input_path),
                 output_path: config.output_path.unwrap_or(output_path),
                 output_as_zstd: config.output_as_zstd.unwrap_or(output_as_zstd),
-                output_zstd_compression: config
-                    .output_zstd_compression
-                    .unwrap_or(output_zstd_compression),
+                output_zstd_compression: verify_compression_level(
+                    config
+                        .output_zstd_compression
+                        .unwrap_or(output_zstd_compression),
+                ),
                 output_suffix: config.output_suffix.unwrap_or(output_suffix),
                 output_file_extension: config
                     .output_file_extension
