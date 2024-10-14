@@ -1,6 +1,8 @@
 use std::error::Error;
+use std::ffi::c_float;
 use std::fs;
 use std::fs::File;
+use std::io;
 use std::io::{BufRead, BufReader, BufWriter, Error as IoError, Lines, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
@@ -15,17 +17,27 @@ use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sysinfo::System;
 use zstd::compression_level_range;
 use zstd::stream::read::Decoder;
 use zstd::stream::write::Encoder;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let start_time = Instant::now();
+    // Shared counter for the total decompressed size
+    let total_decompressed_size = Arc::new(AtomicUsize::new(0));
+
     // Set up config parameters from cli, the config file and fallback values
     let mut config = set_config();
 
+    // Create thread pool for file processing, we also need to reserve one for the progress updater
+    let threads = if config.threads == 0 {
+        0
+    } else {
+        config.threads + 1
+    };
+
     rayon::ThreadPoolBuilder::new()
-        .num_threads(config.threads)
+        .num_threads(threads)
         .build_global()
         .unwrap();
 
@@ -52,11 +64,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Find all .zst files in input_path
+    let mut total_dir_size = 0;
     let zstd_files: Vec<_> = fs::read_dir(&config.input)?
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
             if path.extension().and_then(|ext| ext.to_str()) == Some("zst") {
+                let metadata = entry.metadata().ok()?;
+                total_dir_size += metadata.len();
                 Some(path)
             } else {
                 None
@@ -64,9 +79,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         })
         .collect();
 
+    // Display files
     let total_files = zstd_files.len();
     let display_limit = 5;
-    print_if_not_quiet(config.quiet, &format!("Found {} .zstd files:", total_files));
+    print_if_not_quiet(
+        config.quiet,
+        &format!(
+            "Found {} .zst files ({}):",
+            total_files,
+            HumanBytes(total_dir_size)
+        ),
+    );
     for file in zstd_files.iter().take(display_limit) {
         if let Some(file_name) = file.file_name() {
             print_if_not_quiet(config.quiet, &format!("- {:?}", file_name));
@@ -76,19 +99,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         print_if_not_quiet(config.quiet, &format!("..."));
     }
 
-    // Shared total counter for the total decompressed size
-    let total_decompressed_size = Arc::new(AtomicUsize::new(0));
-
-    // progress bar
+    // Create progress bar
     let pb = ProgressBar::new(zstd_files.len() as u64);
     pb.set_style(
         ProgressStyle::with_template(
-            "{spinner:.cyan} [{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({eta}) {msg}",
+            "[{elapsed_precise}] {spinner:.cyan}{bar:40.cyan/blue} {pos}/{len} ({eta}) {msg}",
         )
         .unwrap()
         .progress_chars("#>-"),
     );
-    pb.enable_steady_tick(Duration::from_millis(100));
+    pb.enable_steady_tick(Duration::from_millis(50));
+
+    // Pretty sure there's a better way, though I can't find it
+    let a = pb.clone();
+    let b = total_decompressed_size.clone();
+    let c = config.clone();
+    rayon::spawn(move || start_progress_updater(a, Arc::clone(&b), &c));
 
     // Start a file operation for every available thread
     zstd_files.par_iter().for_each(|file_path| {
@@ -97,7 +123,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             &config,
             &pb,
             Arc::clone(&total_decompressed_size),
-            start_time,
         );
         pb.inc(1);
     });
@@ -124,7 +149,6 @@ fn read_lines(
     config: &Config,
     pb: &ProgressBar,
     total_decompressed_size: Arc<AtomicUsize>,
-    start_time: Instant,
 ) -> std::io::Result<()> {
     // Operates on a single zstd file decompressing it line by line
 
@@ -218,8 +242,6 @@ fn read_lines(
     if let Ok(lines) = a(reader) {
         for line in lines {
             if let Ok(line) = line {
-                decompressed_size += line.len();
-
                 // Test regex pattern
                 // This is the place to add new line-by-line logic
                 if pattern.is_match(&line) {
@@ -237,6 +259,13 @@ fn read_lines(
                         flush_buffer(&mut buffer, &mut write_to_output).unwrap();
                     }
                 }
+
+                decompressed_size += line.len();
+                if decompressed_size > 1000000000 {
+                    // Update in 1 GB intervals
+                    total_decompressed_size.fetch_add(decompressed_size, Ordering::SeqCst);
+                    decompressed_size = 0;
+                }
             } else {
                 panic!(
                     "Error when decompressing {} with the error: {line:?}\n\
@@ -247,17 +276,8 @@ fn read_lines(
         }
     }
 
+    // Update the process bar by adding the remaining size
     total_decompressed_size.fetch_add(decompressed_size, Ordering::SeqCst);
-    let current_size = total_decompressed_size.load(Ordering::SeqCst);
-    let mut start_time = start_time.elapsed().as_secs();
-    if start_time == 0 {
-        start_time += 1;
-    }
-    pb.set_message(format!(
-        "@ {}/s, Total: {}",
-        HumanBytes(current_size as u64 / start_time),
-        HumanBytes(current_size as u64)
-    ));
 
     // Flush any remaining data in the buffer to the output file
     if !buffer.is_empty() {
@@ -335,6 +355,45 @@ fn verify_zstd_without_tar(file_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+// Function to start a separate thread for updating the progress bar.
+fn start_progress_updater(pb: ProgressBar, total_size: Arc<AtomicUsize>, config: &Config) {
+    let mut sys = System::new_all();
+    let start_time = Instant::now();
+    loop {
+        let elapsed = start_time.elapsed().as_secs_f64();
+        let total_size = total_size.load(Ordering::SeqCst);
+        let avg_speed = total_size as f64 / elapsed;
+
+        sys.refresh_all();
+        std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+        let pid = sysinfo::get_current_pid().unwrap();
+        let process = sys.process(pid).unwrap();
+
+        // Fetch CPU, memory, and I/O stats
+        let cpu_usage = process.cpu_usage() / config.threads as c_float;
+        let memory_usage = process.memory();
+        let disk_usage = process.disk_usage();
+
+        pb.set_message(format!(
+            "\nCPU: {:.2}%, Mem: {}, Data: {}, Proc. Speed: {}/s, I/O Reads: {}/s, I/O Writes: {}/s",
+            cpu_usage,
+            HumanBytes(memory_usage),
+            HumanBytes(total_size as u64),
+            HumanBytes(avg_speed as u64),
+            HumanBytes(disk_usage.read_bytes),
+            HumanBytes(disk_usage.written_bytes),
+        ));
+
+        // Exit the updater if the progress bar is finished
+        if pb.is_finished() {
+            break;
+        }
+
+        // Update every 500ms
+        std::thread::sleep(Duration::from_millis(1000));
+    }
+}
+
 /// Command line argument structure
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Rust Configuration Demo", long_about = None)]
@@ -364,7 +423,7 @@ struct Cli {
 }
 
 // Internal and config.toml structure
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct Config {
     input: String,
     output: String,
@@ -399,7 +458,7 @@ fn set_config() -> Config {
     let fallback_file_extension = String::from(".jsonl"); // suffix for your output file
     let fallback_pattern = String::from(r#"^"#); // match everything
     let fallback_threads = 0; // max number of threads rayon spawn, 0 means no limit
-    let fallback_buffer = 100000000; // the buffer size after which data is written to disk, here: 100MB
+    let fallback_buffer = 4096; // the buffer size after which data is written to disk, here: 4KiB
     let fallback_quiet = false;
 
     // Parse command-line arguments.

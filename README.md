@@ -66,7 +66,7 @@ Created files will follow the structure ``{output_path}original_filename_without
 | ``--file-extension`` | The file extension for extracted files. Will be ignored if ``output_as_zstd`` is set to ``true``. | ``.jsonl`` |
 | ``--pattern`` | The regex pattern to be applied line-by-line. A match means the line will be included in the output. Keep in mind that regex terms with special characters need to be escaped properly. | ``^`` matches everything |
 | ``--threads`` | The maximum number of threads used by rayon. Since each thread reads from one file, changing this number also affects I/O.  | ``0`` unlimited |
-| ``--buffer`` | The maximum buffer per thread before matches lines are written to disk. That means e.g. 24 threads x 100 MB buffer means up to 2.4 GB of memory can be used for buffering. | ``100000000`` 100 MB |
+| ``--buffer`` | The maximum buffer per thread before matches lines are written to disk. | ``4096`` 4KiB |
 |``--quiet``| Displays only the current progress and error messages | ``false`` |
 
 ## Practical examples
@@ -88,7 +88,7 @@ pattern = '","mode":62,"' # make sure to properly escape if needed
 
 # Performance
 threads = 0
-buffer = 100000000
+buffer = 4096
 quiet = false
 ```
 This finds all Team Scorched matches in Destiny PGCRs by identifying ``","mode":62,"``. Make sure your source files are well defined and your regex terms are robust enough. It then writes them to uncompressed files called ``{file}_scorch.jsonl``. 
@@ -114,14 +114,14 @@ Matching is performed via regex because it was significantly faster than parsing
 
 ### Memory
 
-Stream decompression drastically reduces the memory usage, however the number of spawned threads and their respective write buffer request 100 MB each by default. These could add up to a few gigabytes though in practice you can stay far below that for strong filter ratios. It depends on how large these buffers grow simultaneously. You can change all these parameters in the config.
+Stream decompression drastically reduces the memory usage. For my test set the usage sits around 300 MB. However the exact value depends on several factors like the size of a single line in your decompressed file.
 
 ### I/O
 
 Although zstd-jsonl-filter is usually CPU bound when reading from an NVMe, that can quickly change for other sources. Reading from network storage or hard drives can be a bottleneck. You can set ``max_threads`` to change the number of simultaneous file operations if that impacts your source medium.
 
 Write speeds depend on how many entries are filtered, your storage speed and if compression is used.
-By default zstd-jsonl-filter writes to a 100 MB buffer which you can adjust as needed.
+By default zstd-jsonl-filter writes to a 4 KiB buffer which you can adjust as needed.
 
 # Donate
 
