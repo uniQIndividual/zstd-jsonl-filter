@@ -2,10 +2,11 @@
 
 zstd-jsonl-filter can effortlessly filter terabytes of data with minimal memory usage and I/O writes. The only limitation is that your data must be interpretable line-by-line. It uses zstd's stream decoder and rayon's parallelism to very efficiently decompress and filter gigantic datasets in memory by streaming several files at once.
 
-
+<br>
 <p align="center">
-<img src=".\assets\explanation.png" width="80%"/>
+<img src="https://github.com/user-attachments/assets/3c545b26-f4b5-4cef-a4fa-99e494611eb5" width="80%"/>
 </p>
+
 
 \
 \
@@ -16,6 +17,11 @@ To be clear: zstd-jsonl-filter is mainly useful if
 (any newline separated file should work, although I only tested JSON Lines)
 - the uncompressed data is infeasible to store in ram or on disk
 
+<br>
+<p align="center">
+<img src=".\assets\explanation.png" width="80%"/>
+</p>
+<br>
 
 # How to use zstd-jsonl-filter
 
@@ -97,7 +103,7 @@ This finds all Team Scorched matches in Destiny PGCRs by identifying ``","mode":
 ```powershell
 .\zstd-jsonl-filter.exe --input \\10.0.0.2\D2_PGCR\bungo-pgcr-12b --output C:\Users\User\Documents\Destiny_PGCR\test --zstd --compression-level 14 --threads 2 --pattern '","mode":62,"' --quiet
 ```
-This examples also finds all Team Scorched matches and writes them to compressed files called ``{file}_filtered.zst``. It is restricted to only 2 threads and only displays the current progress and important error messages.
+This examples also finds all Team Scorched matches with ``","mode":62,"`` in the network share ``\\10.0.0.2\D2_PGCR\bungo-pgcr-12b`` and writes the output to compressed files called ``{file}_filtered.zst``. It is restricted to only ``2`` threads and with ``--quiet`` it will only display the current progress and important error messages.
 
 Without arguments or ``config.toml`` zstd-jsonl-filter will default back to extracting every .zst archive in the current directory without filtering any lines.
 
