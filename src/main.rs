@@ -2,7 +2,6 @@ use std::error::Error;
 use std::ffi::c_float;
 use std::fs;
 use std::fs::File;
-use std::io;
 use std::io::{BufRead, BufReader, BufWriter, Error as IoError, Lines, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
@@ -18,16 +17,17 @@ use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sysinfo::System;
-use zstd::compression_level_range;
 use zstd::stream::read::Decoder;
 use zstd::stream::write::Encoder;
 
 fn main() -> Result<(), Box<dyn Error>> {
     // Shared counter for the total decompressed size
-    let total_decompressed_size = Arc::new(AtomicUsize::new(0));
+    let global_decompressed_size = Arc::new(AtomicUsize::new(0));
+    let global_decompressed_lines = Arc::new(AtomicUsize::new(0));
+    let global_filtered_lines = Arc::new(AtomicUsize::new(0));
 
     // Set up config parameters from cli, the config file and fallback values
-    let mut config = set_config();
+    let config = set_config();
 
     // Create thread pool for file processing, we also need to reserve one for the progress updater
     let threads = if config.threads == 0 {
@@ -41,10 +41,37 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build_global()
         .unwrap();
 
-    if !config.input.ends_with('/') {
-        config.input.push('/');
-    }
-    if !PathBuf::from(&config.input).is_dir() {
+    // Find all .zst files in input_path
+    let mut total_dir_size = 0;
+    let mut zstd_files = Vec::new();
+
+    // Verify that the input path is valid and create it if necessary
+    let input_path = PathBuf::from(&config.input);
+    if input_path.exists() {
+        if !input_path.is_dir() {
+            if input_path.extension().and_then(|ext| ext.to_str()) == Some("zst") {
+                let metadata_res = input_path.metadata();
+                if let Ok(metadata) = metadata_res {
+                    total_dir_size += metadata.len();
+                    zstd_files.push(input_path);
+                }
+            }
+        } else {
+            zstd_files = fs::read_dir(&config.input)?
+                .filter_map(|entry| {
+                    let entry = entry.ok()?;
+                    let path = entry.path();
+                    if path.extension().and_then(|ext| ext.to_str()) == Some("zst") {
+                        let metadata = entry.metadata().ok()?;
+                        total_dir_size += metadata.len();
+                        Some(path)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        }
+    } else {
         eprintln!(
             "Error: The input path '{:?}' is not a valid directory.",
             &config.input
@@ -52,32 +79,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         std::process::exit(1);
     }
 
-    if !config.output.ends_with('/') {
-        config.output.push('/');
-    }
-    if !PathBuf::from(&config.output).is_dir() {
-        eprintln!(
-            "Error: The output path '{:?}' is not a valid directory.",
-            &config.output
-        );
-        std::process::exit(1);
-    }
+    if !Path::new(&config.input).is_dir() {}
 
-    // Find all .zst files in input_path
-    let mut total_dir_size = 0;
-    let zstd_files: Vec<_> = fs::read_dir(&config.input)?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) == Some("zst") {
-                let metadata = entry.metadata().ok()?;
-                total_dir_size += metadata.len();
-                Some(path)
-            } else {
-                None
-            }
-        })
-        .collect();
+    // Verify that the output path is valid and create it if necessary
+    let output_path = Path::new(&config.output);
+    if output_path.exists() {
+        if !output_path.is_dir() {
+            eprintln!(
+                "Error: The output path '{:?}' is not a valid directory.",
+                &config.output
+            );
+            std::process::exit(1);
+        }
+    } else {
+        println!("Output directory does not exist. Creating directory...");
+        fs::create_dir_all(output_path)?;
+    }
 
     // Display files
     let total_files = zstd_files.len();
@@ -85,16 +102,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     print_if_not_quiet(
         config.quiet,
         &format!(
-            "Found {} .zst files ({}):",
+            "Found {} .zst file(s) ({}):",
             total_files,
             HumanBytes(total_dir_size)
         ),
     );
-    for file in zstd_files.iter().take(display_limit) {
-        if let Some(file_name) = file.file_name() {
-            print_if_not_quiet(config.quiet, &format!("- {:?}", file_name));
-        }
-    }
+    //for file in zstd_files.iter().take(display_limit) {
+    //    if let Some(file_name) = file.file_name() {
+    //        print_if_not_quiet(config.quiet, &format!("- {:?}", file_name));
+    //    }
+    //}
     if total_files > display_limit {
         print_if_not_quiet(config.quiet, &format!("..."));
     }
@@ -110,11 +127,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     pb.enable_steady_tick(Duration::from_millis(50));
 
+    let start_time = Instant::now(); // We need to initialize this early to prevent funny PiB/s records
+
     // Pretty sure there's a better way, though I can't find it
     let a = pb.clone();
-    let b = total_decompressed_size.clone();
-    let c = config.clone();
-    rayon::spawn(move || start_progress_updater(a, Arc::clone(&b), &c));
+    let b = config.clone();
+    let c = global_decompressed_size.clone();
+    let d = global_decompressed_lines.clone();
+    let e = global_filtered_lines.clone();
+    rayon::spawn(move || start_progress_updater(start_time, a, &b, &c, &d, &e));
 
     // Start a file operation for every available thread
     zstd_files.par_iter().for_each(|file_path| {
@@ -122,7 +143,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             &file_path,
             &config,
             &pb,
-            Arc::clone(&total_decompressed_size),
+            &global_decompressed_size,
+            &global_decompressed_lines,
+            &global_filtered_lines,
         );
         pb.inc(1);
     });
@@ -131,7 +154,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     pb.finish();
     println!("All files processed.");
     /*
-    let final_size = total_decompressed_size.load(Ordering::SeqCst);
+    let final_size = global_decompressed_size.load(Ordering::SeqCst);
     println!(
         "Total time elapsed: {:.2?}s",
         start_time.elapsed().as_secs()
@@ -145,22 +168,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn read_lines(
-    file_path: &Path,
+    input_file_path: &Path,
     config: &Config,
     pb: &ProgressBar,
-    total_decompressed_size: Arc<AtomicUsize>,
+    global_decompressed_size: &Arc<AtomicUsize>,
+    global_decompressed_lines: &Arc<AtomicUsize>,
+    global_filtered_lines: &Arc<AtomicUsize>,
 ) -> std::io::Result<()> {
     // Operates on a single zstd file decompressing it line by line
 
     // Skip if input file is empty
-    if let Ok(metadata) = fs::metadata(file_path) {
+    if let Ok(metadata) = fs::metadata(input_file_path) {
         if metadata.len() == 0 {
             pb.suspend(|| {
                 print_if_not_quiet(
                     config.quiet,
                     &format!(
                         "Skipping empty file: {:?}",
-                        file_path.file_name().unwrap_or_default()
+                        input_file_path.file_name().unwrap_or_default()
                     ),
                 );
             });
@@ -170,14 +195,14 @@ fn read_lines(
         pb.suspend(|| {
             print_if_not_quiet(
                 config.quiet,
-                &format!("Failed to get metadata for: {:?}", file_path),
+                &format!("Failed to get metadata for: {:?}", input_file_path),
             );
         });
         return Ok(());
     }
 
     let output_file_path =
-        generate_output_filename(&file_path.to_string_lossy().to_string(), &config);
+        generate_output_filename(&input_file_path.to_string_lossy().to_string(), &config);
 
     // Skip already existing existing files
     if Path::new(&output_file_path).exists() {
@@ -194,7 +219,7 @@ fn read_lines(
     }
 
     // Verify if the file is not a Zstd archive containing a TAR
-    if let Err(err) = verify_zstd_without_tar(file_path) {
+    if let Err(err) = verify_zstd(input_file_path) {
         pb.suspend(|| print_if_not_quiet(config.quiet, &format!("{}", err)));
         return Ok(());
     }
@@ -205,10 +230,10 @@ fn read_lines(
     // Track the last matching line to avoid trailing newline
     let mut last_matching_line: Option<String> = None;
 
-    let pattern = Regex::new(&config.pattern.as_str()).unwrap();
+    let pattern = Regex::new(&config.pattern.as_str()).unwrap(); //unwrap because already verified
 
-    let output_file = File::create(output_file_path)?;
-    let mut writer = BufWriter::new(output_file);
+    let output_file = File::create(&output_file_path)?;
+    let mut writer = BufWriter::new(&output_file);
 
     // Function to handle output either (compressed or uncompressed)
     let mut write_to_output = |data: &[u8]| -> std::io::Result<()> {
@@ -230,21 +255,28 @@ fn read_lines(
     ) -> Result<Lines<BufReader<Decoder<'static, BufReader<File>>>>, IoError> {
         Ok(reader.lines())
     }
-    let file = File::open(file_path)?;
+    let file = File::open(input_file_path)?;
 
     let decoder = Decoder::new(file)?;
     let reader = BufReader::new(decoder);
 
     // Measure the size of decompressed data
     let mut decompressed_size = 0;
+    let mut line_counter = 0;
+    let mut line_filtered_counter = 0;
 
     // : Result<Lines<BufReader<Decoder<'static, BufReader<File>>>>, IoError>
     if let Ok(lines) = a(reader) {
         for line in lines {
             if let Ok(line) = line {
+                line_counter += 1;
                 // Test regex pattern
                 // This is the place to add new line-by-line logic
+
                 if pattern.is_match(&line) {
+                    //pattern match
+                    line_filtered_counter += 1;
+
                     // Write matches to buffer to decrease the number individual disk writes
                     if let Some(last_line) = last_matching_line.take() {
                         let line_bytes = format!("{}\n", last_line).into_bytes(); // Convert the line to bytes
@@ -261,23 +293,27 @@ fn read_lines(
                 }
 
                 decompressed_size += line.len();
-                if decompressed_size > 1000000000 {
-                    // Update in 1 GB intervals
-                    total_decompressed_size.fetch_add(decompressed_size, Ordering::SeqCst);
+                if decompressed_size > 100000000 {
+                    // Update in 100 MB intervals
+                    global_decompressed_size.fetch_add(decompressed_size, Ordering::SeqCst);
                     decompressed_size = 0;
+                    global_decompressed_lines.fetch_add(line_counter, Ordering::SeqCst);
+                    line_counter = 0;
+                    global_filtered_lines.fetch_add(line_filtered_counter, Ordering::SeqCst);
+                    line_filtered_counter = 0;
                 }
             } else {
                 panic!(
                     "Error when decompressing {} with the error: {line:?}\n\
                 Make sure your zstd archive includes a single jsonl file.",
-                    &file_path.to_string_lossy().to_string()
+                    &input_file_path.to_string_lossy().to_string()
                 );
             }
         }
     }
 
     // Update the process bar by adding the remaining size
-    total_decompressed_size.fetch_add(decompressed_size, Ordering::SeqCst);
+    global_decompressed_size.fetch_add(decompressed_size, Ordering::SeqCst);
 
     // Flush any remaining data in the buffer to the output file
     if !buffer.is_empty() {
@@ -287,6 +323,24 @@ fn read_lines(
     // Write the last matching line without an extra newline
     if let Some(last_line) = last_matching_line {
         write_to_output(last_line.as_bytes())?;
+    }
+
+    // Delete the file if nothing was ever written to it
+    if let Ok(metadata) = &output_file.metadata() {
+        // Check if the file is empty
+        if metadata.len() == 0 {
+            // If the file is empty, delete it
+            fs::remove_file(&output_file_path)?;
+            pb.suspend(|| {
+                print_if_not_quiet(
+                    config.quiet,
+                    &format!(
+                        "Empty output file deleted {:?}",
+                        Path::new(&output_file_path).file_name().unwrap_or_default()
+                    ),
+                );
+            });
+        }
     }
 
     Ok(())
@@ -305,27 +359,44 @@ fn generate_output_filename(input_file_path: &str, config: &Config) -> String {
     let path = Path::new(input_file_path);
 
     // Strip the ".jsonl.zst" extension
-    let input_stem = path.file_stem().unwrap().to_string_lossy().to_string(); // e.g. "13030000000-13040000000.jsonl"
+    let input_stem = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string(); // e.g. "13030000000-13040000000.jsonl"
+
     let file_stem_without_extension = Path::new(&input_stem)
         .file_stem()
-        .unwrap()
+        .unwrap_or_default()
         .to_string_lossy(); // Get only base file name if applicable, i.e. "13030000000-13040000000"
+
+    let original_file_extension = Path::new(&input_stem)
+        .extension()
+        .unwrap_or_default()
+        .to_string_lossy();
+
+    let output_file_extention = {
+        if config.file_extension.is_empty() {
+            format!(".{}", original_file_extension)
+        } else {
+            format!(".{}", config.file_extension)
+        }
+    };
     if config.zstd {
-        // ignore output_file_extension and set .zst
         format!(
-            "{}{file_stem_without_extension}{}.zst",
-            config.output, config.suffix
+            "{}{file_stem_without_extension}{}{}.zst",
+            config.output, config.suffix, output_file_extention
         )
     } else {
         format!(
             "{}{file_stem_without_extension}{}{}",
-            config.output, config.suffix, config.file_extension
+            config.output, config.suffix, output_file_extention
         )
     }
 }
 
-// Verify that the file is a valid zstd file and contains no tar
-fn verify_zstd_without_tar(file_path: &Path) -> Result<(), String> {
+// Verify that the file is a valid zstd file
+fn verify_zstd(file_path: &Path) -> Result<(), String> {
     let mut file = File::open(file_path).map_err(|e| format!("Failed to open file: {}", e))?;
 
     // Read the first few bytes to detect Zstd magic number
@@ -356,13 +427,28 @@ fn verify_zstd_without_tar(file_path: &Path) -> Result<(), String> {
 }
 
 // Function to start a separate thread for updating the progress bar.
-fn start_progress_updater(pb: ProgressBar, total_size: Arc<AtomicUsize>, config: &Config) {
+fn start_progress_updater(
+    start_time: Instant,
+    pb: ProgressBar,
+    config: &Config,
+    global_size: &Arc<AtomicUsize>,
+    global_decompressed_lines: &Arc<AtomicUsize>,
+    global_filtered_lines: &Arc<AtomicUsize>,
+) {
     let mut sys = System::new_all();
-    let start_time = Instant::now();
     loop {
         let elapsed = start_time.elapsed().as_secs_f64();
-        let total_size = total_size.load(Ordering::SeqCst);
-        let avg_speed = total_size as f64 / elapsed;
+        let global_size = global_size.load(Ordering::SeqCst);
+        let global_filtered_lines = global_filtered_lines.load(Ordering::SeqCst);
+        let global_decompressed_lines = global_decompressed_lines.load(Ordering::SeqCst);
+        let line_ratio = {
+            if global_decompressed_lines == 0 {
+                0
+            } else {
+                100 - global_filtered_lines / global_decompressed_lines
+            }
+        };
+        let avg_speed = global_size as f64 / elapsed;
 
         sys.refresh_all();
         std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
@@ -375,13 +461,16 @@ fn start_progress_updater(pb: ProgressBar, total_size: Arc<AtomicUsize>, config:
         let disk_usage = process.disk_usage();
 
         pb.set_message(format!(
-            "\nCPU: {:.2}%, Mem: {}, Data: {}, Proc. Speed: {}/s, I/O Reads: {}/s, I/O Writes: {}/s",
+            "\nCPU: {:.2}%, Mem: {}, Data: {}, Proc. Speed: {}/s, I/O Reads: {}/s, I/O Writes: {}/s\n{}/{} lines read/kept ({}% filtered)",
             cpu_usage,
             HumanBytes(memory_usage),
-            HumanBytes(total_size as u64),
+            HumanBytes(global_size as u64),
             HumanBytes(avg_speed as u64),
             HumanBytes(disk_usage.read_bytes),
             HumanBytes(disk_usage.written_bytes),
+            global_filtered_lines,
+            global_decompressed_lines,
+            line_ratio
         ));
 
         // Exit the updater if the progress bar is finished
@@ -455,7 +544,7 @@ fn set_config() -> Config {
     let fallback_zstd = false; // by default extract everything
     let fallback_compression_level = 0; // zstd compression level between 1-22, 0 means the default of 3
     let fallback_suffix = String::from("_filtered"); // suffix for your output file
-    let fallback_file_extension = String::from(".jsonl"); // suffix for your output file
+    let fallback_file_extension = String::from(""); // file extension for your output file
     let fallback_pattern = String::from(r#"^"#); // match everything
     let fallback_threads = 0; // max number of threads rayon spawn, 0 means no limit
     let fallback_buffer = 4096; // the buffer size after which data is written to disk, here: 4KiB
@@ -549,7 +638,7 @@ fn set_config() -> Config {
     };
 
     // Verify valid zstd compression level range
-    compression_level = if compression_level_range().contains(&compression_level) {
+    compression_level = if zstd::compression_level_range().contains(&compression_level) {
         compression_level
     } else {
         0

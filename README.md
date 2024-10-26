@@ -1,6 +1,6 @@
 # What is zstd-jsonl-filter?
 
-zstd-jsonl-filter can effortlessly filter terabytes of data with minimal memory usage and I/O writes. The only limitation is that your data must be interpretable line-by-line. It uses zstd's stream decoder and rayon's parallelism to very efficiently decompress and filter gigantic datasets in memory by streaming several files at once.
+zstd-jsonl-filter takes advantage of zstd's incredibly high decompression speed to effortlessly filter terabytes of data faster than you could read it from disk. It does so with minimal memory usage and I/O writes, holding only the relevant file section in memory. The only limitation is that your data must be interpretable line-by-line (e.g. jsonl, log and csv). It uses zstd's stream decoder and rayon's parallelism to very efficiently decompress and filter gigantic datasets in memory by streaming several files at once.
 
 <br>
 <p align="center">
@@ -10,12 +10,12 @@ zstd-jsonl-filter can effortlessly filter terabytes of data with minimal memory 
 
 \
 \
-To be clear: zstd-jsonl-filter is mainly useful if
+# Is zstd-jsonl-filter the right tool for you?
 
-- you have multiple zstd archives
-- they each contain a file that can be interpreted line-by-line\
-(any newline separated file should work, although I only tested JSON Lines)
-- the uncompressed data is infeasible to store in ram or on disk
+- You have multiple zstd archives which must be can be interpretable line-by-line\
+(any newline separated file should work, although I mainly use it for JSON Lines)
+- The uncompressed data is infeasible to store in ram or on disk
+- You want to process data faster than you could read it from your source
 
 <br>
 <p align="center">
@@ -25,13 +25,13 @@ To be clear: zstd-jsonl-filter is mainly useful if
 
 # How to use zstd-jsonl-filter
 
-Say you had a couple billion ~~Destiny 2 PGCR sessions~~ log entires from your fortune 500 employer (please don't actually use it for that) which are neatly separated in smaller chunks and compressed with zstd. If you wanted to extract only relevant entries  ~~( e.g. all Team Scorched matches)~~ you'd have to temporarily store a decompressed version in ram or disk to filter them. With zstd-jsonl-filter you can perform these pattern matching without ever needing to hold the entire file.
+Say you had a couple billion ~~Destiny 2 PGCR sessions~~ log entires from your fortune 500 employer (please don't actually use it for that) which are neatly separated in smaller chunks and compressed with zstd. If you wanted to extract only relevant entries  ~~( e.g. all Team Scorched matches)~~ you'd have to temporarily store a decompressed version in ram or disk to filter them. With zstd-jsonl-filter you can perform this pattern matching without ever needing to hold the entire file.
 
 1. Build zstd-jsonl-filter or download [the latest release](https://github.com/uniQIndividual/zstd-jsonl-filter/releases/latest)
 2. Open ``config.json`` and set your parameters (see [this section](https://github.com/uniQIndividual/zstd-jsonl-filter#options) for more details)
 3. Make sure your data is in the following format (i.e. no tar): 
 ```
-input_path
+input_path/
 ├───12000000000-12010000000.jsonl.zst 
 │   └───12000000000-12010000000.jsonl
 ├───12010000000-12020000000.jsonl.zst
@@ -40,7 +40,7 @@ input_path
 .
 .
 ```
-The names are irrelevant, but zstd-jsonl-filter does not support multiple files within an archive.
+The names are irrelevant, but you need to make sure your filetype and patterns are applicable line-by-line. zstd-jsonl-filter is not going to stop you from e.g. reading a .tar but you may get unexpected results.
 
 4. Run zstd-jsonl-filter
 
@@ -64,12 +64,12 @@ Created files will follow the structure ``{output_path}original_filename_without
 | Parameter      | Description      | Default |
 | ------------- | ------------- | ------------- |
 | ``--config`` | Point zstd-jsonl-filter to the config file. | ``config.toml`` in the same folder |
-| ``--input`` | The path where your .zst files are located.<br>Both ``/`` slashes and ``\`` backslashes work. | ``./`` current folder
+| ``--input`` | The path where your .zst files are located.<br>Both ``/`` slashes and ``\`` backslashes work. It is also possible to point to a single file. | ``./`` current folder
 | ``--output`` | Where the output files should be stored. | ``./`` current folder. |
-| ``--zstd`` | Whether the output should be stored as a compressed .zst file. ``true`` will overwrite ``output_file_extension``. | ``false`` no zstd compression. |
+| ``--zstd`` | Whether the output should be stored as a compressed .zst file. | ``false`` no zstd compression. |
 | ``--compression-level`` | The zstd compression level from 1 (fastest) to 22 (smallest) | ``0`` use zstd default |
 | ``--suffix`` | Name to be appended to output files. Will generate e.g.<br>``12000000000-12010000000_filtered.zst``. | ``_filtered`` |
-| ``--file-extension`` | The file extension for extracted files. Will be ignored if ``output_as_zstd`` is set to ``true``. | ``.jsonl`` |
+| ``--file-extension`` | If you want to replace the file extension for output files. You can usually leave this empty, otherwise do not include a dot i.e. ``jsonl`` | ``""`` |
 | ``--pattern`` | The regex pattern to be applied line-by-line. A match means the line will be included in the output. Keep in mind that regex terms with special characters need to be escaped properly. | ``^`` matches everything |
 | ``--threads`` | The maximum number of threads used by rayon. Since each thread reads from one file, changing this number also affects I/O.  | ``0`` unlimited |
 | ``--buffer`` | The maximum buffer per thread before matches lines are written to disk. | ``4096`` 4KiB |
@@ -87,7 +87,7 @@ output = 'C:\Users\User\Documents\Destiny_PGCR\test' # backslashes also work
 zstd = false
 compression_level = 14
 suffix = "_scorch"
-file_extension = ".jsonl"
+file_extension = "jsonl"
 
 # Regex Filter
 pattern = '","mode":62,"' # make sure to properly escape if needed

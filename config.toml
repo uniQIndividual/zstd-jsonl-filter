@@ -6,10 +6,12 @@ input = './'
 
 # Output Parameters
 output = './'
+suffix = "_filtered"
+file_extension = ""
+
+# Output as zstd?
 zstd = false
 compression_level = 0
-suffix = "_filtered"
-file_extension = ".jsonl"
 
 # Regex Filter
 pattern = '^'
