@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use std::{fs, u64};
 
 use clap::Parser;
-use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
+use indicatif::{HumanBytes, HumanCount, HumanDuration, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -102,11 +102,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Display files
     let total_files = zstd_files.len();
-    let display_limit = 5;
+    //let display_limit = 5;
     print_if_not_quiet(
         config.quiet,
         &format!(
-            "Found {} .zst file(s) ({}):",
+            "Found {} .zst file(s) ({})",
             total_files,
             HumanBytes(total_dir_size)
         ),
@@ -116,9 +116,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     //        print_if_not_quiet(config.quiet, &format!("- {:?}", file_name));
     //    }
     //}
-    if total_files > display_limit {
-        print_if_not_quiet(config.quiet, &format!("..."));
-    }
+    //if total_files > display_limit {
+    //    print_if_not_quiet(config.quiet, &format!("..."));
+    //}
 
     // Create progress bar
     let pb = ProgressBar::new(zstd_files.len() as u64);
@@ -173,6 +173,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "Average processing speed: {}/s",
         HumanBytes(final_size as u64 / start_time.elapsed().as_secs())
     );*/
+    println!("{} lines", global_decompressed_lines.load(Ordering::SeqCst));
     Ok(())
 }
 
@@ -497,13 +498,13 @@ fn start_progress_updater(
         let avg_speed = global_size as f64 / elapsed;
         let line_speed = global_decompressed_lines as f64 / elapsed;
         let remaining_compressed_data = total_dir_size - processed_size_estimate;
-        let remaining_time = remaining_compressed_data / disk_usage.read_bytes;
+        let remaining_time = remaining_compressed_data / (disk_usage.read_bytes + 1); // just don't panic please
         let remaining_percentage = (processed_size_estimate * 100) as f64 / total_dir_size as f64;
 
         pb.set_message(format!(
-            "({} remaining)\nCPU: {:2.2}% | Memory: {} | Speed: {:.0} lines/s | Reads/Writes: {}/s {}/s\nDecompression: {} total, {}/s\nData source: {}/{} ({:.2}%)\nLines: {}/{} kept/read ({:.2}% filter ratio)",
+            "({} remaining)\nCPU: {}% | Memory: {} | Speed: {:.0} lines/s | Reads/Writes: {}/s {}/s\nDecompression: {} total, {}/s\nData source: {}/{} ({:.2}%)\nLines: {}/{} kept/read ({:.2}% filter ratio)",
             HumanDuration(Duration::new(remaining_time as u64, 0)),
-            cpu_usage,
+            cpu_usage_string,
             HumanBytes(memory_usage),
             line_speed,
             HumanBytes(disk_usage.read_bytes),
@@ -513,8 +514,8 @@ fn start_progress_updater(
             HumanBytes(processed_size_estimate),
             HumanBytes(total_dir_size),
             remaining_percentage,
-            global_filtered_lines,
-            global_decompressed_lines,
+            HumanCount(global_filtered_lines as u64),
+            HumanCount(global_decompressed_lines as u64),
             line_ratio
         ));
 
