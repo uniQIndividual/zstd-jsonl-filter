@@ -8,6 +8,7 @@ input = './'
 output = './'
 suffix = "_filtered"
 file_extension = ""
+no_write = false
 
 # Output as zstd?
 zstd = false
@@ -18,5 +19,5 @@ pattern = '^'
 
 # Performance
 threads = 0
-buffer = 100000000
+buffer = 4096
 quiet = false

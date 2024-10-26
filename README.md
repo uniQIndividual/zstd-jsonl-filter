@@ -8,8 +8,10 @@ zstd-jsonl-filter takes advantage of zstd's incredibly high decompression speed 
 </p>
 
 
-\
-\
+<br>
+<br>
+
+
 # Is zstd-jsonl-filter the right tool for you?
 
 - You have multiple zstd archives which must be can be interpretable line-by-line\
@@ -120,7 +122,7 @@ Matching is performed via regex because it was significantly faster than parsing
 
 ### Memory
 
-Stream decompression drastically reduces the memory usage. For my test set the usage sits around 300 MB. However the exact value depends on several factors like the size of a single line in your decompressed file.
+Stream decompression drastically reduces the memory usage. For my test set the usage sits around 300 MB. However the exact value depends on several factors like the size of a single line in your decompressed file and if you write to zstd compressed output.
 
 ### I/O
 

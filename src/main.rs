@@ -1,18 +1,19 @@
 use std::error::Error;
 use std::ffi::c_float;
-use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Error as IoError, Lines, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::atomic::AtomicU64;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
 use std::time::{Duration, Instant};
+use std::{fs, u64};
 
 use clap::Parser;
-use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
+use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -20,11 +21,14 @@ use sysinfo::System;
 use zstd::stream::read::Decoder;
 use zstd::stream::write::Encoder;
 
+const PB_UPDATE_INTERVAL: u64 = 1000; // Update interval in ms
+
 fn main() -> Result<(), Box<dyn Error>> {
     // Shared counter for the total decompressed size
     let global_decompressed_size = Arc::new(AtomicUsize::new(0));
     let global_decompressed_lines = Arc::new(AtomicUsize::new(0));
     let global_filtered_lines = Arc::new(AtomicUsize::new(0));
+    let global_processed_size = Arc::new(AtomicU64::new(0));
 
     // Set up config parameters from cli, the config file and fallback values
     let config = set_config();
@@ -120,7 +124,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let pb = ProgressBar::new(zstd_files.len() as u64);
     pb.set_style(
         ProgressStyle::with_template(
-            "[{elapsed_precise}] {spinner:.cyan}{bar:40.cyan/blue} {pos}/{len} ({eta}) {msg}",
+            "[{elapsed_precise}] {spinner:.cyan}{bar:40.cyan/blue} {pos}/{len} {msg}",
         )
         .unwrap()
         .progress_chars("#>-"),
@@ -135,7 +139,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let c = global_decompressed_size.clone();
     let d = global_decompressed_lines.clone();
     let e = global_filtered_lines.clone();
-    rayon::spawn(move || start_progress_updater(start_time, a, &b, &c, &d, &e));
+    let f = global_processed_size.clone();
+    rayon::spawn(move || start_progress_updater(start_time, total_dir_size, a, &b, &c, &d, &e, &f));
 
     // Start a file operation for every available thread
     zstd_files.par_iter().for_each(|file_path| {
@@ -146,9 +151,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             &global_decompressed_size,
             &global_decompressed_lines,
             &global_filtered_lines,
+            &global_processed_size,
         );
         pb.inc(1);
     });
+
+    // Wait PB_UPDATE_INTERVAL so the progressbar updates one last time
+    std::thread::sleep(Duration::from_millis(PB_UPDATE_INTERVAL * 2));
 
     //pb.finish_with_message("All files processed.");
     pb.finish();
@@ -174,9 +183,10 @@ fn read_lines(
     global_decompressed_size: &Arc<AtomicUsize>,
     global_decompressed_lines: &Arc<AtomicUsize>,
     global_filtered_lines: &Arc<AtomicUsize>,
+    global_processed_size: &Arc<AtomicU64>,
 ) -> std::io::Result<()> {
     // Operates on a single zstd file decompressing it line by line
-
+    let filesize;
     // Skip if input file is empty
     if let Ok(metadata) = fs::metadata(input_file_path) {
         if metadata.len() == 0 {
@@ -190,6 +200,8 @@ fn read_lines(
                 );
             });
             return Ok(());
+        } else {
+            filesize = metadata.len();
         }
     } else {
         pb.suspend(|| {
@@ -218,7 +230,7 @@ fn read_lines(
         return Ok(());
     }
 
-    // Verify if the file is not a Zstd archive containing a TAR
+    // Verify if the file is a valid zstd
     if let Err(err) = verify_zstd(input_file_path) {
         pb.suspend(|| print_if_not_quiet(config.quiet, &format!("{}", err)));
         return Ok(());
@@ -232,7 +244,7 @@ fn read_lines(
 
     let pattern = Regex::new(&config.pattern.as_str()).unwrap(); //unwrap because already verified
 
-    let output_file = File::create(&output_file_path)?;
+    let output_file = File::create_new(&output_file_path)?;
     let mut writer = BufWriter::new(&output_file);
 
     // Function to handle output either (compressed or uncompressed)
@@ -264,6 +276,7 @@ fn read_lines(
     let mut decompressed_size = 0;
     let mut line_counter = 0;
     let mut line_filtered_counter = 0;
+    let mut flag_data_written = false;
 
     // : Result<Lines<BufReader<Decoder<'static, BufReader<File>>>>, IoError>
     if let Ok(lines) = a(reader) {
@@ -274,27 +287,32 @@ fn read_lines(
                 // This is the place to add new line-by-line logic
 
                 if pattern.is_match(&line) {
-                    //pattern match
+                    // Pattern matches
                     line_filtered_counter += 1;
 
-                    // Write matches to buffer to decrease the number individual disk writes
-                    if let Some(last_line) = last_matching_line.take() {
-                        let line_bytes = format!("{}\n", last_line).into_bytes(); // Convert the line to bytes
-                        buffer.extend_from_slice(&line_bytes); // Append to the buffer
-                    }
+                    if !config.no_write {
+                        // Skip if no output should be written
+                        flag_data_written = true;
 
-                    // Store the current matching line as the last line
-                    last_matching_line = Some(line.to_string());
+                        // Write matches to buffer to decrease the number individual disk writes
+                        if let Some(last_line) = last_matching_line.take() {
+                            let line_bytes = format!("{}\n", last_line).into_bytes(); // Convert the line to bytes
+                            buffer.extend_from_slice(&line_bytes); // Append to the buffer
+                        }
 
-                    // If the buffer size exceeds the limit, flush it to the output file
-                    if buffer.len() >= config.buffer {
-                        flush_buffer(&mut buffer, &mut write_to_output).unwrap();
+                        // Store the current matching line as the last line
+                        last_matching_line = Some(line.to_string());
+
+                        // If the buffer size exceeds the limit, flush it to the output file
+                        if buffer.len() >= config.buffer {
+                            flush_buffer(&mut buffer, &mut write_to_output).unwrap();
+                        }
                     }
                 }
 
                 decompressed_size += line.len();
-                if decompressed_size > 100000000 {
-                    // Update in 100 MB intervals
+                if decompressed_size > 500000000 {
+                    // Update in 500 MB intervals
                     global_decompressed_size.fetch_add(decompressed_size, Ordering::SeqCst);
                     decompressed_size = 0;
                     global_decompressed_lines.fetch_add(line_counter, Ordering::SeqCst);
@@ -314,6 +332,9 @@ fn read_lines(
 
     // Update the process bar by adding the remaining size
     global_decompressed_size.fetch_add(decompressed_size, Ordering::SeqCst);
+    global_decompressed_lines.fetch_add(line_counter, Ordering::SeqCst);
+    global_filtered_lines.fetch_add(line_filtered_counter, Ordering::SeqCst);
+    global_processed_size.fetch_add(filesize, Ordering::SeqCst);
 
     // Flush any remaining data in the buffer to the output file
     if !buffer.is_empty() {
@@ -326,21 +347,18 @@ fn read_lines(
     }
 
     // Delete the file if nothing was ever written to it
-    if let Ok(metadata) = &output_file.metadata() {
+    if !flag_data_written {
         // Check if the file is empty
-        if metadata.len() == 0 {
-            // If the file is empty, delete it
-            fs::remove_file(&output_file_path)?;
-            pb.suspend(|| {
-                print_if_not_quiet(
-                    config.quiet,
-                    &format!(
-                        "Empty output file deleted {:?}",
-                        Path::new(&output_file_path).file_name().unwrap_or_default()
-                    ),
-                );
-            });
-        }
+        fs::remove_file(&output_file_path)?;
+        pb.suspend(|| {
+            print_if_not_quiet(
+                config.quiet,
+                &format!(
+                    "Empty output file deleted {:?}",
+                    Path::new(&output_file_path).file_name().unwrap_or_default()
+                ),
+            );
+        });
     }
 
     Ok(())
@@ -429,26 +447,31 @@ fn verify_zstd(file_path: &Path) -> Result<(), String> {
 // Function to start a separate thread for updating the progress bar.
 fn start_progress_updater(
     start_time: Instant,
+    total_dir_size: u64,
     pb: ProgressBar,
     config: &Config,
     global_size: &Arc<AtomicUsize>,
     global_decompressed_lines: &Arc<AtomicUsize>,
     global_filtered_lines: &Arc<AtomicUsize>,
+    global_processed_size: &Arc<AtomicU64>,
 ) {
     let mut sys = System::new_all();
+    let mut last_accurate_proc_size = 0;
+    let mut processed_size_estimate = 0;
     loop {
         let elapsed = start_time.elapsed().as_secs_f64();
         let global_size = global_size.load(Ordering::SeqCst);
         let global_filtered_lines = global_filtered_lines.load(Ordering::SeqCst);
         let global_decompressed_lines = global_decompressed_lines.load(Ordering::SeqCst);
+        let global_processed_size = global_processed_size.load(Ordering::SeqCst);
         let line_ratio = {
             if global_decompressed_lines == 0 {
-                0
+                0 as f64
             } else {
-                100 - global_filtered_lines / global_decompressed_lines
+                ((global_decompressed_lines - global_filtered_lines) * 100) as f64
+                    / global_decompressed_lines as f64
             }
         };
-        let avg_speed = global_size as f64 / elapsed;
 
         sys.refresh_all();
         std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
@@ -456,18 +479,40 @@ fn start_progress_updater(
         let process = sys.process(pid).unwrap();
 
         // Fetch CPU, memory, and I/O stats
-        let cpu_usage = process.cpu_usage() / config.threads as c_float;
+        let cpu_usage = process.cpu_usage() / sys.cpus().len() as c_float;
+        let mut cpu_usage_string = cpu_usage.to_string();
+        if cpu_usage_string.len() < 5 {
+            cpu_usage_string.insert_str(0, "0");
+        };
         let memory_usage = process.memory();
         let disk_usage = process.disk_usage();
 
+        //  update or estimate the size
+        if last_accurate_proc_size == global_processed_size {
+            processed_size_estimate += disk_usage.read_bytes;
+        } else {
+            last_accurate_proc_size = global_processed_size;
+            processed_size_estimate = global_processed_size;
+        }
+        let avg_speed = global_size as f64 / elapsed;
+        let line_speed = global_decompressed_lines as f64 / elapsed;
+        let remaining_compressed_data = total_dir_size - processed_size_estimate;
+        let remaining_time = remaining_compressed_data / disk_usage.read_bytes;
+        let remaining_percentage = (processed_size_estimate * 100) as f64 / total_dir_size as f64;
+
         pb.set_message(format!(
-            "\nCPU: {:.2}%, Mem: {}, Data: {}, Proc. Speed: {}/s, I/O Reads: {}/s, I/O Writes: {}/s\n{}/{} lines read/kept ({}% filtered)",
+            "({} remaining)\nCPU: {:2.2}% | Memory: {} | Speed: {:.0} lines/s | Reads/Writes: {}/s {}/s\nDecompression: {} total, {}/s\nData source: {}/{} ({:.2}%)\nLines: {}/{} kept/read ({:.2}% filter ratio)",
+            HumanDuration(Duration::new(remaining_time as u64, 0)),
             cpu_usage,
             HumanBytes(memory_usage),
-            HumanBytes(global_size as u64),
-            HumanBytes(avg_speed as u64),
+            line_speed,
             HumanBytes(disk_usage.read_bytes),
             HumanBytes(disk_usage.written_bytes),
+            HumanBytes(global_size as u64),
+            HumanBytes(avg_speed as u64),
+            HumanBytes(processed_size_estimate),
+            HumanBytes(total_dir_size),
+            remaining_percentage,
             global_filtered_lines,
             global_decompressed_lines,
             line_ratio
@@ -478,8 +523,8 @@ fn start_progress_updater(
             break;
         }
 
-        // Update every 500ms
-        std::thread::sleep(Duration::from_millis(1000));
+        // Update every PB_UPDATE_INTERVAL
+        std::thread::sleep(Duration::from_millis(PB_UPDATE_INTERVAL));
     }
 }
 
@@ -505,6 +550,8 @@ struct Cli {
     threads: Option<usize>,
     #[arg(long = "buffer")]
     buffer: Option<usize>,
+    #[arg(long = "no-write")]
+    no_write: bool,
     #[arg(long = "quiet")]
     quiet: bool,
     #[arg(long = "config", default_value = "config.toml")]
@@ -512,7 +559,7 @@ struct Cli {
 }
 
 // Internal and config.toml structure
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct Config {
     input: String,
     output: String,
@@ -523,6 +570,7 @@ struct Config {
     pattern: String,
     threads: usize,
     buffer: usize,
+    no_write: bool,
     quiet: bool,
 }
 
@@ -548,6 +596,7 @@ fn set_config() -> Config {
     let fallback_pattern = String::from(r#"^"#); // match everything
     let fallback_threads = 0; // max number of threads rayon spawn, 0 means no limit
     let fallback_buffer = 4096; // the buffer size after which data is written to disk, here: 4KiB
+    let fallback_no_write = false; // do not write to output
     let fallback_quiet = false;
 
     // Parse command-line arguments.
@@ -621,6 +670,13 @@ fn set_config() -> Config {
         .or_else(|| Some(config.as_ref()?.buffer.clone()))
         .unwrap_or_else(|| fallback_buffer);
 
+    // Do not write to output
+    let no_write = cli.no_write
+        || config
+            .as_ref()
+            .and_then(|c| Some(c.no_write))
+            .unwrap_or(fallback_no_write);
+
     // Mute most announcements
     let quiet = cli.quiet
         || config
@@ -654,6 +710,7 @@ fn set_config() -> Config {
         pattern: pattern,
         threads: threads,
         buffer: buffer,
+        no_write: no_write,
         quiet: quiet,
     }
 }
