@@ -72,7 +72,7 @@ Created files will follow the structure ``{output_path}original_filename_without
 | ``--compression-level`` | The zstd compression level from 1 (fastest) to 22 (smallest) | ``0`` use zstd default |
 | ``--suffix`` | Name to be appended to output files. Will generate e.g.<br>``12000000000-12010000000_filtered.zst``. | ``_filtered`` |
 | ``--file-extension`` | If you want to replace the file extension for output files. You can usually leave this empty, otherwise do not include a dot i.e. ``jsonl`` | ``""`` |
-| ``--pattern`` | The regex pattern to be applied line-by-line. A match means the line will be included in the output. Keep in mind that regex terms with special characters need to be escaped properly. | ``^`` matches everything |
+| ``--pattern`` | The regex pattern to be applied line-by-line. A match means the line will be included in the output. Keep in mind that regex terms with special characters need to be escaped properly. Look-around are not supported in favor of a worst case performance of [O(m * n)](https://docs.rs/regex/latest/regex/). | ``^`` matches everything |
 | ``--threads`` | The maximum number of threads used by rayon. Since each thread reads from one file, changing this number also affects I/O.  | ``0`` unlimited |
 | ``--buffer`` | The maximum buffer per thread before matches lines are written to disk. | ``4096`` 4KiB |
 |``--quiet``| Displays only the current progress and error messages | ``false`` |
@@ -92,7 +92,7 @@ suffix = "_scorch"
 file_extension = "jsonl"
 
 # Regex Filter
-pattern = '","mode":62,"' # make sure to properly escape if needed
+pattern = '","mode":62,"' # make sure to properly escape if needed, look-arounds are not supported
 
 # Performance
 threads = 0
@@ -118,7 +118,7 @@ Using a Ryzen 9 3900x and a test set of 200 GB zstd archives stored on NVMe driv
 
 zstd-jsonl-filter uses rayon for parallelization across files. This means it decompresses one file per thread at once. If you have less files than suggested threads, you will not see any speedup. You can set the maximum number of threads ``max_threads``.
 
-Matching is performed via regex because it was significantly faster than parsing each JSON. This depends on what you have to work with, adjust as needed.
+Matching is performed via regex because it was significantly faster than parsing each JSON. It uses the regex crate implementation which runs in linear time. This depends on what you have to work with, adjust as needed.
 
 ### Memory
 

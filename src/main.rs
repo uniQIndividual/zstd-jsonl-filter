@@ -174,7 +174,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         "Average processing speed: {}/s",
         HumanBytes(final_size as u64 / start_time.elapsed().as_secs())
     );*/
-    println!("{} lines", global_decompressed_lines.load(Ordering::SeqCst));
     Ok(())
 }
 
@@ -469,7 +468,7 @@ fn start_progress_updater(
             if global_decompressed_lines == 0 {
                 0 as f64
             } else {
-                ((global_decompressed_lines - global_filtered_lines) * 100) as f64
+                ((global_filtered_lines) * 100) as f64
                     / global_decompressed_lines as f64
             }
         };
@@ -502,21 +501,21 @@ fn start_progress_updater(
         let remaining_percentage = (processed_size_estimate * 100) as f64 / total_dir_size as f64;
         
         pb.set_message(format!(
-            "({} remaining)\nCPU: {} | Memory: {} | Speed: {} | I/O Reads: {} | I/O Writes: {}\nDecompressed: {} ({}) | Read Progress: {}/{} ({})\nKept/Total Lines: {}/{} ({} filtered)",
+            "({} remaining)\nCPU: {} | Memory: {} | Speed: {} | I/O Reads: {} | I/O Writes: {}\nDecompressed: {} ({}) | Read Progress: {}/{} ({})\nKept/Total Lines: {}/{} ({})",
             HumanDuration(Duration::new(remaining_time as u64, 0)),
             format!("{:.5}%", cpu_usage_string).bright_blue(),
             format!("{}", HumanBytes(memory_usage)).bright_blue(),
-            format!("{:.0} lines/s", line_speed).bright_magenta(),
-            format!("{}/s", HumanBytes(disk_usage.read_bytes)).bright_magenta(),
-            format!("{}/s", HumanBytes(disk_usage.written_bytes)).bright_magenta(),
-            format!("{}", HumanBytes(global_size as u64)).bright_blue(),
-            format!("{}/s", HumanBytes(avg_speed as u64)).bright_magenta(),
-            format!("{}", HumanBytes(processed_size_estimate)).bright_blue(),
+            format!("{:.0} lines/s", line_speed).bright_blue(),
+            format!("{}/s", HumanBytes(disk_usage.read_bytes)).bright_blue(),
+            format!("{}/s", HumanBytes(disk_usage.written_bytes)).bright_blue(),
+            format!("{}", HumanBytes(global_size as u64)),
+            format!("{}/s", HumanBytes(avg_speed as u64)).bright_blue(),
+            format!("{}", HumanBytes(processed_size_estimate)),
             format!("{}", HumanBytes(total_dir_size)),
-            format!("{:.2}%", remaining_percentage).bright_magenta(),
+            format!("{:.2}%", remaining_percentage).bright_blue(),
             format!("{}", HumanCount(global_filtered_lines as u64)),
             format!("{}", HumanCount(global_decompressed_lines as u64)),
-            format!("{:.2}%", line_ratio).bright_blue()
+            format!("{:.4}%", line_ratio).bright_blue()
         ));
 
         // Exit the updater if the progress bar is finished
