@@ -246,7 +246,7 @@ fn read_lines(
 
     let pattern = Regex::new(&config.pattern.as_str()).unwrap(); //unwrap because already verified
 
-    let output_file = File::create_new(&output_file_path)?;
+    let output_file = File::create(&output_file_path)?;
     let mut writer = BufWriter::new(&output_file);
 
     // Function to handle output either (compressed or uncompressed)
@@ -502,7 +502,7 @@ fn start_progress_updater(
         let remaining_percentage = (processed_size_estimate * 100) as f64 / total_dir_size as f64;
         
         pb.set_message(format!(
-            "({} remaining)\nCPU: {} | Memory: {} | Speed: {} | I/O Reads: {} | I/O Writes: {}\nDecompressed: {} ({})\nRead from input: {}/{} ({})\nKept/Total lines: {}/{} ({} filtered)",
+            "({} remaining)\nCPU: {} | Memory: {} | Speed: {} | I/O Reads: {} | I/O Writes: {}\nDecompressed: {} ({}) | Read Progress: {}/{} ({})\nKept/Total Lines: {}/{} ({} filtered)",
             HumanDuration(Duration::new(remaining_time as u64, 0)),
             format!("{:.5}%", cpu_usage_string).bright_blue(),
             format!("{}", HumanBytes(memory_usage)).bright_blue(),
@@ -514,7 +514,7 @@ fn start_progress_updater(
             format!("{}", HumanBytes(processed_size_estimate)).bright_blue(),
             format!("{}", HumanBytes(total_dir_size)),
             format!("{:.2}%", remaining_percentage).bright_magenta(),
-            format!("{}", HumanCount(global_filtered_lines as u64)).bright_blue(),
+            format!("{}", HumanCount(global_filtered_lines as u64)),
             format!("{}", HumanCount(global_decompressed_lines as u64)),
             format!("{:.2}%", line_ratio).bright_blue()
         ));
