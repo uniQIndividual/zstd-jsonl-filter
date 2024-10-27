@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use std::{fs, u64};
 
 use clap::Parser;
+use colored::*;
 use indicatif::{HumanBytes, HumanCount, HumanDuration, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use regex::Regex;
@@ -124,7 +125,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let pb = ProgressBar::new(zstd_files.len() as u64);
     pb.set_style(
         ProgressStyle::with_template(
-            "[{elapsed_precise}] {spinner:.cyan}{bar:40.cyan/blue} {pos}/{len} {msg}",
+            "[{elapsed_precise}] [{spinner:.cyan}{bar:40.cyan/blue}] {pos}/{len} {msg}",
         )
         .unwrap()
         .progress_chars("#>-"),
@@ -263,7 +264,7 @@ fn read_lines(
     };
 
     // Using https://stackoverflow.com/questions/77304382/how-to-decode-and-read-a-zstd-file-in-rust
-    fn a(
+    fn start_reading(
         reader: BufReader<Decoder<'static, BufReader<File>>>,
     ) -> Result<Lines<BufReader<Decoder<'static, BufReader<File>>>>, IoError> {
         Ok(reader.lines())
@@ -278,15 +279,14 @@ fn read_lines(
     let mut line_counter = 0;
     let mut line_filtered_counter = 0;
     let mut flag_data_written = false;
-
-    // : Result<Lines<BufReader<Decoder<'static, BufReader<File>>>>, IoError>
-    if let Ok(lines) = a(reader) {
+    
+    
+    if let Ok(lines) = start_reading(reader) {
         for line in lines {
             if let Ok(line) = line {
                 line_counter += 1;
                 // Test regex pattern
                 // This is the place to add new line-by-line logic
-
                 if pattern.is_match(&line) {
                     // Pattern matches
                     line_filtered_counter += 1;
@@ -482,8 +482,8 @@ fn start_progress_updater(
         // Fetch CPU, memory, and I/O stats
         let cpu_usage = process.cpu_usage() / sys.cpus().len() as c_float;
         let mut cpu_usage_string = cpu_usage.to_string();
-        if cpu_usage_string.len() < 5 {
-            cpu_usage_string.insert_str(0, "0");
+        if cpu_usage < 10 as f32 {
+            cpu_usage_string.insert_str(0, " ");
         };
         let memory_usage = process.memory();
         let disk_usage = process.disk_usage();
@@ -500,23 +500,23 @@ fn start_progress_updater(
         let remaining_compressed_data = total_dir_size - processed_size_estimate;
         let remaining_time = remaining_compressed_data / (disk_usage.read_bytes + 1); // just don't panic please
         let remaining_percentage = (processed_size_estimate * 100) as f64 / total_dir_size as f64;
-
+        
         pb.set_message(format!(
-            "({} remaining)\nCPU: {}% | Memory: {} | Speed: {:.0} lines/s | Reads/Writes: {}/s {}/s\nDecompression: {} total, {}/s\nData source: {}/{} ({:.2}%)\nLines: {}/{} kept/read ({:.2}% filter ratio)",
+            "({} remaining)\nCPU: {} | Memory: {} | Speed: {} | I/O Reads: {} | I/O Writes: {}\nDecompressed: {} ({})\nRead from input: {}/{} ({})\nKept/Total lines: {}/{} ({} filtered)",
             HumanDuration(Duration::new(remaining_time as u64, 0)),
-            cpu_usage_string,
-            HumanBytes(memory_usage),
-            line_speed,
-            HumanBytes(disk_usage.read_bytes),
-            HumanBytes(disk_usage.written_bytes),
-            HumanBytes(global_size as u64),
-            HumanBytes(avg_speed as u64),
-            HumanBytes(processed_size_estimate),
-            HumanBytes(total_dir_size),
-            remaining_percentage,
-            HumanCount(global_filtered_lines as u64),
-            HumanCount(global_decompressed_lines as u64),
-            line_ratio
+            format!("{:.5}%", cpu_usage_string).bright_blue(),
+            format!("{}", HumanBytes(memory_usage)).bright_blue(),
+            format!("{:.0} lines/s", line_speed).bright_magenta(),
+            format!("{}/s", HumanBytes(disk_usage.read_bytes)).bright_magenta(),
+            format!("{}/s", HumanBytes(disk_usage.written_bytes)).bright_magenta(),
+            format!("{}", HumanBytes(global_size as u64)).bright_blue(),
+            format!("{}/s", HumanBytes(avg_speed as u64)).bright_magenta(),
+            format!("{}", HumanBytes(processed_size_estimate)).bright_blue(),
+            format!("{}", HumanBytes(total_dir_size)),
+            format!("{:.2}%", remaining_percentage).bright_magenta(),
+            format!("{}", HumanCount(global_filtered_lines as u64)).bright_blue(),
+            format!("{}", HumanCount(global_decompressed_lines as u64)),
+            format!("{:.2}%", line_ratio).bright_blue()
         ));
 
         // Exit the updater if the progress bar is finished
