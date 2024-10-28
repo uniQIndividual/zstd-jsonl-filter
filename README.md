@@ -86,10 +86,13 @@ input = 'C:/Users/User/Documents/Destiny_PGCR/bungo-pgcr-12b/'
 
 # Output Parameters
 output = 'C:\Users\User\Documents\Destiny_PGCR\test' # backslashes also work
-zstd = false
-compression_level = 14
 suffix = "_scorch"
 file_extension = "jsonl"
+no_write = false
+
+# In this example we the output to be uncompressed thus we set zstd to false
+zstd = false
+compression_level = 0
 
 # Regex Filter
 pattern = '","mode":62,"' # make sure to properly escape if needed, look-arounds are not supported
@@ -103,11 +106,19 @@ This finds all Team Scorched matches in Destiny PGCRs by identifying ``","mode":
 
 ### Using arguments
 ```powershell
-.\zstd-jsonl-filter.exe --input \\10.0.0.2\D2_PGCR\bungo-pgcr-12b --output C:\Users\User\Documents\Destiny_PGCR\test --zstd --compression-level 14 --threads 2 --pattern '","mode":62,"' --quiet
+.\zstd-jsonl-filter.exe --input "\\10.0.0.2\D2_PGCR\bungo-pgcr-12b" --output "C:\Users\User\Documents\Destiny_PGCR\test" --zstd --compression-level 14 --threads 2 --pattern '","mode":62,"' --quiet
 ```
 This examples also finds all Team Scorched matches with ``","mode":62,"`` in the network share ``\\10.0.0.2\D2_PGCR\bungo-pgcr-12b`` and writes the output to compressed files called ``{file}_filtered.zst``. It is restricted to only ``2`` threads and with ``--quiet`` it will only display the current progress and important error messages.
 
 Without arguments or ``config.toml`` zstd-jsonl-filter will default back to extracting every .zst archive in the current directory without filtering any lines.
+
+### Only counting with --no-write
+
+```powershell
+.\zstd-jsonl-filter.exe --no-write --input "\\10.0.0.2\D2_PGCR\bungo-pgcr-12b"  --output "E:\already occupied path\" --threads 2 --pattern '("teams":\[\{("\w*":[\w\."]*,)*"score":6\d,("\w*":[\w\."]*,*)*\},\{("\w*":[\w\.]*,)*"score":0,)|("teams":\[\{("\w*":[\w\."]*,)*"score":0,("\w*":[\w\."]*,*)*\},\{("\w*":[\w\.]*,)*"score":6\d,)'
+```
+
+This is really useful if you just want to see how often your term occurs or if you want to test your regex before committing to a potentially long write. I would recommend to not use the ``--quiet`` flag to show all potential issues that (would) occur if were to run it again without ``--no-write``. This includes e.g. already existing files in the output path which zstd-jsonl-filter will not overwrite. This is why ``--output`` will still affect the outcome. zstd-jsonl-filter is currently still writing empty files and deleting them before exiting, which will change in a future update.
 
 
 # Performance
