@@ -30,7 +30,7 @@ zstd-jsonl-filter takes advantage of zstd's incredibly high decompression speed 
 Say you had a couple billion ~~Destiny 2 PGCR sessions~~ log entires from your fortune 500 employer (please don't actually use it for that) which are neatly separated in smaller chunks and compressed with zstd. If you wanted to extract only relevant entries  ~~( e.g. all Team Scorched matches)~~ you'd have to temporarily store a decompressed version in ram or disk to filter them. With zstd-jsonl-filter you can perform this pattern matching without ever needing to hold the entire file.
 
 1. Build zstd-jsonl-filter or download [the latest release](https://github.com/uniQIndividual/zstd-jsonl-filter/releases/latest)
-2. Open ``config.json`` and set your parameters (see [this section](https://github.com/uniQIndividual/zstd-jsonl-filter#options) for more details)
+2. Open ``config.toml`` and set your parameters (see [this section](https://github.com/uniQIndividual/zstd-jsonl-filter#options) for more details) and in particular ``pattern`` which is the regex term that is matched against a line from the decompressed files. When a pattern matches the entire line is included in the output, otherwise it is discarded.
 3. Make sure your data is in the following format (i.e. no tar): 
 ```
 input_path/
@@ -119,6 +119,8 @@ Without arguments or ``config.toml`` zstd-jsonl-filter will default back to extr
 ```
 
 This is really useful if you just want to see how often your term occurs or if you want to test your regex before committing to a potentially long write. I would recommend to not use the ``--quiet`` flag to show all potential issues that (would) occur if were to run it again without ``--no-write``. This includes e.g. already existing files in the output path which zstd-jsonl-filter will not overwrite. This is why ``--output`` will still affect the outcome. zstd-jsonl-filter is currently still writing empty files and deleting them before exiting, which will change in a future update.
+
+If you're curious about the regex: It *should* return all matches won 60:0 or 0:60. As it turns out though, there can be more than 2 teams when a player was not assigned to one. These kinds of quick checks is what ``--no-write`` is very useful for.
 
 
 # Performance
