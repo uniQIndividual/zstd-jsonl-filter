@@ -3,7 +3,6 @@ use std::ffi::c_float;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Error as IoError, Lines, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process;
 use std::sync::atomic::AtomicU64;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -11,6 +10,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 use std::{fs, u64};
+use std::{process, usize};
 
 use clap::Parser;
 use colored::*;
@@ -19,6 +19,7 @@ use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sysinfo::System;
+use terminal_size::{terminal_size, Width};
 use zstd::stream::read::Decoder;
 use zstd::stream::write::Encoder;
 
@@ -30,6 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let global_decompressed_lines = Arc::new(AtomicUsize::new(0));
     let global_filtered_lines = Arc::new(AtomicUsize::new(0));
     let global_processed_size = Arc::new(AtomicU64::new(0));
+    let global_to_be_processed_size = Arc::new(AtomicU64::new(0));
 
     // Set up config parameters from cli, the config file and fallback values
     let config = set_config();
@@ -83,6 +85,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
         std::process::exit(1);
     }
+    global_to_be_processed_size.fetch_add(total_dir_size, Ordering::Relaxed);
 
     if !Path::new(&config.input).is_dir() {}
 
@@ -122,11 +125,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     //}
 
     // Create progress bar
+    let bar_width = match terminal_size() {
+        Some((Width(w), _)) => w as usize - 48,
+        None => 40,
+    };
     let pb = ProgressBar::new(zstd_files.len() as u64);
     pb.set_style(
-        ProgressStyle::with_template(
-            "[{elapsed_precise}] [{spinner:.cyan}{bar:40.cyan/blue}] {pos}/{len} {msg}",
-        )
+        ProgressStyle::with_template(&format!(
+            "[{{elapsed_precise}}] [{{spinner:.cyan}}{{bar:{}.cyan/blue}}] {{pos}}/{{len}} files {{msg}}",
+            bar_width
+        ))
         .unwrap()
         .progress_chars("#>-"),
     );
@@ -134,14 +142,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let start_time = Instant::now(); // We need to initialize this early to prevent funny PiB/s records
 
-    // Pretty sure there's a better way, though I can't find it
-    let a = pb.clone();
-    let b = config.clone();
-    let c = global_decompressed_size.clone();
-    let d = global_decompressed_lines.clone();
-    let e = global_filtered_lines.clone();
-    let f = global_processed_size.clone();
-    rayon::spawn(move || start_progress_updater(start_time, total_dir_size, a, &b, &c, &d, &e, &f));
+    // Cloned references to the shared
+    let a = Arc::clone(&global_to_be_processed_size);
+    let b = pb.clone();
+    let c = config.clone();
+    let d = Arc::clone(&global_decompressed_size);
+    let e = Arc::clone(&global_decompressed_lines);
+    let f = Arc::clone(&global_filtered_lines);
+    let g = Arc::clone(&global_processed_size);
+    rayon::spawn(move || start_progress_updater(start_time, &a, b, &c, &d, &e, &f, &g));
 
     // Start a file operation for every available thread
     zstd_files.par_iter().for_each(|file_path| {
@@ -153,6 +162,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &global_decompressed_lines,
             &global_filtered_lines,
             &global_processed_size,
+            &global_to_be_processed_size,
         );
         pb.inc(1);
     });
@@ -185,6 +195,7 @@ fn read_lines(
     global_decompressed_lines: &Arc<AtomicUsize>,
     global_filtered_lines: &Arc<AtomicUsize>,
     global_processed_size: &Arc<AtomicU64>,
+    global_to_be_processed_size: &Arc<AtomicU64>,
 ) -> std::io::Result<()> {
     // Operates on a single zstd file decompressing it line by line
     let filesize;
@@ -219,6 +230,7 @@ fn read_lines(
 
     // Skip already existing existing files
     if Path::new(&output_file_path).exists() {
+        global_to_be_processed_size.fetch_sub(filesize, Ordering::Relaxed); // remove the file size from the total to be read count
         pb.suspend(|| {
             print_if_not_quiet(
                 config.quiet,
@@ -278,8 +290,7 @@ fn read_lines(
     let mut line_counter = 0;
     let mut line_filtered_counter = 0;
     let mut flag_data_written = false;
-    
-    
+
     if let Ok(lines) = start_reading(reader) {
         for line in lines {
             if let Ok(line) = line {
@@ -313,11 +324,12 @@ fn read_lines(
                 decompressed_size += line.len();
                 if decompressed_size > 500000000 {
                     // Update in 500 MB intervals
-                    global_decompressed_size.fetch_add(decompressed_size, Ordering::SeqCst);
+                    // Relaxed Ordering because we only care about eventual consistency
+                    global_decompressed_size.fetch_add(decompressed_size, Ordering::Relaxed);
                     decompressed_size = 0;
-                    global_decompressed_lines.fetch_add(line_counter, Ordering::SeqCst);
+                    global_decompressed_lines.fetch_add(line_counter, Ordering::Relaxed);
                     line_counter = 0;
-                    global_filtered_lines.fetch_add(line_filtered_counter, Ordering::SeqCst);
+                    global_filtered_lines.fetch_add(line_filtered_counter, Ordering::Relaxed);
                     line_filtered_counter = 0;
                 }
             } else {
@@ -331,10 +343,10 @@ fn read_lines(
     }
 
     // Update the process bar by adding the remaining size
-    global_decompressed_size.fetch_add(decompressed_size, Ordering::SeqCst);
-    global_decompressed_lines.fetch_add(line_counter, Ordering::SeqCst);
-    global_filtered_lines.fetch_add(line_filtered_counter, Ordering::SeqCst);
-    global_processed_size.fetch_add(filesize, Ordering::SeqCst);
+    global_decompressed_size.fetch_add(decompressed_size, Ordering::Relaxed);
+    global_decompressed_lines.fetch_add(line_counter, Ordering::Relaxed);
+    global_filtered_lines.fetch_add(line_filtered_counter, Ordering::Relaxed);
+    global_processed_size.fetch_add(filesize, Ordering::Relaxed);
 
     // Flush any remaining data in the buffer to the output file
     if !buffer.is_empty() {
@@ -447,10 +459,10 @@ fn verify_zstd(file_path: &Path) -> Result<(), String> {
 // Function to start a separate thread for updating the progress bar.
 fn start_progress_updater(
     start_time: Instant,
-    total_dir_size: u64,
+    global_to_be_processed_size: &Arc<AtomicU64>,
     pb: ProgressBar,
     config: &Config,
-    global_size: &Arc<AtomicUsize>,
+    global_decompressed_size: &Arc<AtomicUsize>,
     global_decompressed_lines: &Arc<AtomicUsize>,
     global_filtered_lines: &Arc<AtomicUsize>,
     global_processed_size: &Arc<AtomicU64>,
@@ -460,18 +472,24 @@ fn start_progress_updater(
     let mut processed_size_estimate = 0;
     loop {
         let elapsed = start_time.elapsed().as_secs_f64();
-        let global_size = global_size.load(Ordering::SeqCst);
-        let global_filtered_lines = global_filtered_lines.load(Ordering::SeqCst);
-        let global_decompressed_lines = global_decompressed_lines.load(Ordering::SeqCst);
-        let global_processed_size = global_processed_size.load(Ordering::SeqCst);
+        let global_decompressed_size = global_decompressed_size.load(Ordering::Relaxed);
+        let global_filtered_lines = global_filtered_lines.load(Ordering::Relaxed);
+        let global_decompressed_lines = global_decompressed_lines.load(Ordering::Relaxed);
+        let global_processed_size = global_processed_size.load(Ordering::Relaxed);
+        let global_to_be_processed_size = global_to_be_processed_size.load(Ordering::Relaxed);
+
+        let global_to_be_processed_size_string =
+            format!("{}", HumanBytes(global_to_be_processed_size));
+        let global_to_be_processed_size_string_len =
+            global_to_be_processed_size_string.chars().count();
         let line_ratio = {
             if global_decompressed_lines == 0 {
                 0 as f64
             } else {
-                ((global_filtered_lines) * 100) as f64
-                    / global_decompressed_lines as f64
+                ((global_filtered_lines) * 100) as f64 / global_decompressed_lines as f64
             }
         };
+        let line_ratio_string = format!("{:.4}%", line_ratio);
 
         sys.refresh_all();
         std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
@@ -484,38 +502,90 @@ fn start_progress_updater(
         if cpu_usage < 10 as f32 {
             cpu_usage_string.insert_str(0, " ");
         };
-        let memory_usage = process.memory();
-        let disk_usage = process.disk_usage();
+        cpu_usage_string = format!("{:.5}%", cpu_usage_string);
+        let cpu_usage_string_len = cpu_usage_string.chars().count();
 
-        //  update or estimate the size
+        let memory_usage = format!("{}", HumanBytes(process.memory()));
+        let memory_usage_len = memory_usage.chars().count();
+
+        let disk_usage = process.disk_usage();
+        let disk_usage_reads = disk_usage.read_bytes;
+        let disk_usage_writes = disk_usage.written_bytes;
+        let disk_usage_reads_string = format!("{}/s", HumanBytes(disk_usage_reads));
+        let disk_total_reads_string_len = disk_usage_reads_string.chars().count();
+        let disk_usage_writes_string = format!("{}/s", HumanBytes(disk_usage_writes));
+        let disk_usage_writes_string_len = disk_usage_writes_string.chars().count();
+
+        //  update or estimate the size, somewhat more accurate than // processed_size_estimate = disk_total_reads;
         if last_accurate_proc_size == global_processed_size {
             processed_size_estimate += disk_usage.read_bytes;
         } else {
             last_accurate_proc_size = global_processed_size;
             processed_size_estimate = global_processed_size;
         }
-        let avg_speed = global_size as f64 / elapsed;
-        let line_speed = global_decompressed_lines as f64 / elapsed;
-        let remaining_compressed_data = total_dir_size - processed_size_estimate;
-        let remaining_time = remaining_compressed_data / (disk_usage.read_bytes + 1); // just don't panic please
-        let remaining_percentage = (processed_size_estimate * 100) as f64 / total_dir_size as f64;
+
+        let avg_speed = global_decompressed_size as f64 / elapsed;
+        let line_speed = format!("{:.0} lines/s", global_decompressed_lines as f64 / elapsed);
+        let line_speed_len = line_speed.chars().count();
+        let remaining_compressed_data = global_to_be_processed_size - processed_size_estimate;
         
+
+        let remaining_time = HumanDuration(Duration::new((remaining_compressed_data as f64 / (disk_usage_reads as f64)) as u64, 0));
+
+        let remaining_percentage_string = {
+            if global_decompressed_lines == 0 {
+                format!("0%")
+            } else {
+                format!(
+                    "{:.2}%",
+                    (processed_size_estimate * 100) as f64 / global_to_be_processed_size as f64
+                )
+            }
+        };
+        let remaining_percentage_string_len = remaining_percentage_string.chars().count();
+        let processed_size_estimate_string = format!("{}", HumanBytes(processed_size_estimate));
+        let processed_size_estimate_string_len = processed_size_estimate_string.chars().count();
+
+        let terminal_size = match terminal_size() {
+            Some((Width(w), _)) => w as usize,
+            None => 40,
+        };
+        fn print_pb_divider(bar_width: usize, mut position: usize, size: usize) -> &'static str {
+            position = position % bar_width;
+            if position + size > bar_width {
+                "\n"
+            } else {
+                " | "
+            }
+        }
+
+        let too_long = cpu_usage_string_len + memory_usage_len + line_speed_len + processed_size_estimate_string_len + global_to_be_processed_size_string_len + remaining_percentage_string_len + 43;
+
         pb.set_message(format!(
-            "({} remaining)\nCPU: {} | Memory: {} | Speed: {} | I/O Reads: {} | I/O Writes: {}\nDecompressed: {} ({}) | Read Progress: {}/{} ({})\nKept/Total Lines: {}/{} ({})",
-            HumanDuration(Duration::new(remaining_time as u64, 0)),
-            format!("{:.5}%", cpu_usage_string).bright_blue(),
-            format!("{}", HumanBytes(memory_usage)).bright_blue(),
-            format!("{:.0} lines/s", line_speed).bright_blue(),
-            format!("{}/s", HumanBytes(disk_usage.read_bytes)).bright_blue(),
-            format!("{}/s", HumanBytes(disk_usage.written_bytes)).bright_blue(),
-            format!("{}", HumanBytes(global_size as u64)),
+            "({} remaining)\nCPU: {}{}Memory: {}{}Speed: {}{}Progress: {}/{} ({}){}I/O Reads: {} | I/O Writes: {}\nDecompressed: {} ({})\nKept/Total Lines: {}/{} ({})",
+            remaining_time,
+            cpu_usage_string.bright_blue(),
+
+            print_pb_divider(terminal_size, cpu_usage_string_len + 5, memory_usage_len + 11),
+            memory_usage.bright_blue(),
+
+            print_pb_divider(terminal_size, cpu_usage_string_len + memory_usage_len + 16, line_speed_len + 10),
+            line_speed.bright_blue(),
+
+            print_pb_divider(terminal_size, cpu_usage_string_len + memory_usage_len + line_speed_len + 26, processed_size_estimate_string_len + global_to_be_processed_size_string_len + remaining_percentage_string_len + 17),
+            processed_size_estimate_string,
+            global_to_be_processed_size_string,
+            remaining_percentage_string.bright_blue(),
+
+            print_pb_divider(terminal_size, too_long, disk_total_reads_string_len + disk_usage_writes_string_len + 29),
+            disk_usage_reads_string.bright_blue(),
+            disk_usage_writes_string.bright_blue(),
+
+            format!("{}", HumanBytes(global_decompressed_size as u64)),
             format!("{}/s", HumanBytes(avg_speed as u64)).bright_blue(),
-            format!("{}", HumanBytes(processed_size_estimate)),
-            format!("{}", HumanBytes(total_dir_size)),
-            format!("{:.2}%", remaining_percentage).bright_blue(),
             format!("{}", HumanCount(global_filtered_lines as u64)),
             format!("{}", HumanCount(global_decompressed_lines as u64)),
-            format!("{:.4}%", line_ratio).bright_blue()
+            line_ratio_string.bright_blue()
         ));
 
         // Exit the updater if the progress bar is finished
