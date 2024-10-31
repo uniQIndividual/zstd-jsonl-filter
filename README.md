@@ -76,6 +76,7 @@ Created files will follow the structure ``{output_path}original_filename_without
 | ``--threads`` | The maximum number of threads used by rayon. Since each thread reads from one file, changing this number also affects I/O.  | ``0`` unlimited |
 | ``--buffer`` | The maximum buffer per thread before matches lines are written to disk. | ``4096`` 4KiB |
 |``--quiet``| Displays only the current progress and error messages | ``false`` |
+|``--no-write``| Does not write any output files. Can be used for testing or line counting. It will check for already existing output files so you can spot conflicts before running long tasks. | ``false`` |
 
 ## Practical examples
 
@@ -85,9 +86,9 @@ Created files will follow the structure ``{output_path}original_filename_without
 input = 'C:/Users/User/Documents/Destiny_PGCR/bungo-pgcr-12b/'
 
 # Output Parameters
-output = 'C:\Users\User\Documents\Destiny_PGCR\test' # backslashes also work
+output = 'C:\Users\User\Documents\Destiny_PGCR\test' # Backslashes also work
 suffix = "_scorch"
-file_extension = "jsonl"
+file_extension = "" # You can use this to change the output file extension e.g. from {file}.jsonl.zst to {file}_filtered.txt
 no_write = false
 
 # In this example we the output to be uncompressed thus we set zstd to false
@@ -95,14 +96,14 @@ zstd = false
 compression_level = 0
 
 # Regex Filter
-pattern = '","mode":62,"' # make sure to properly escape if needed, look-arounds are not supported
+pattern = '","mode":62,"' # Make sure to properly escape if needed, look-arounds are not supported
 
 # Performance
 threads = 0
 buffer = 4096
 quiet = false
 ```
-This finds all Team Scorched matches in Destiny PGCRs by identifying ``","mode":62,"``. Make sure your source files are well defined and your regex terms are robust enough. It then writes them to uncompressed files called ``{file}_scorch.jsonl``. 
+This finds all Team Scorched matches in Destiny PGCRs by identifying ``","mode":62,"``. Make sure your source files are well defined and your regex terms are robust enough. Given a file named ``{file}.jsonl.zst`` it then writes the output to uncompressed files called ``{file}_scorch.jsonl``. 
 
 ### Using arguments
 ```powershell
@@ -118,14 +119,14 @@ Without arguments or ``config.toml`` zstd-jsonl-filter will default back to extr
 .\zstd-jsonl-filter.exe --no-write --input "\\10.0.0.2\D2_PGCR\bungo-pgcr-12b"  --output "E:\already occupied path\" --threads 2 --pattern '("teams":\[\{("\w*":[\w\."]*,)*"score":6\d,("\w*":[\w\."]*,*)*\},\{("\w*":[\w\.]*,)*"score":0,)|("teams":\[\{("\w*":[\w\."]*,)*"score":0,("\w*":[\w\."]*,*)*\},\{("\w*":[\w\.]*,)*"score":6\d,)'
 ```
 
-This is really useful if you just want to see how often your term occurs or if you want to test your regex before committing to a potentially long write. I would recommend to not use the ``--quiet`` flag to show all potential issues that (would) occur if were to run it again without ``--no-write``. This includes e.g. already existing files in the output path which zstd-jsonl-filter will not overwrite. This is why ``--output`` will still affect the outcome. zstd-jsonl-filter is currently still writing empty files and deleting them before exiting, which will change in a future update.
+This is really useful if you just want to see how often your term occurs or if you want to test your regex before committing to a potentially long write. I would recommend to not use the ``--quiet`` flag so  shows you all potential issues that (would) occur if were to run it again without ``--no-write``. This includes e.g. already existing files in the output path which zstd-jsonl-filter will not overwrite. This is why ``--output`` will still affect the outcome.
 
 If you're curious about the regex: It *should* return all matches won 60:0 or 0:60. As it turns out though, there can be more than 2 teams when a player was not assigned to one. These kinds of quick checks is what ``--no-write`` is very useful for.
 
 
 # Performance
 
-Using a Ryzen 9 3900x and a test set of 200 GB zstd archives stored on NVMe drives, zstd-jsonl-filter was entirely CPU bound with average read speeds of ~430 MB/s from disk and ~6.8 GB/s of uncompressed data processed in memory. These operation took on average 8 min and processed 3 TB of uncompressed data.
+Using a Ryzen 9 3900x and a test set of 200 GB zstd archives stored on NVMe drives, zstd-jsonl-filter is pretty much always CPU bound with average read speeds of ~600 MB/s from disk and ~5 GB/s of uncompressed data processed in memory. These operation took on average 8 min and processed 3 TB of uncompressed data.
 
 ### CPU
 
@@ -135,7 +136,7 @@ Matching is performed via regex because it was significantly faster than parsing
 
 ### Memory
 
-Stream decompression drastically reduces the memory usage. For my test set the usage sits around 300 MB. However the exact value depends on several factors like the size of a single line in your decompressed file and if you write to zstd compressed output.
+Stream decompression drastically reduces the memory usage. For my test set the usage sits around 200 MB. However the exact value depends on several factors like the size of a single line in your decompressed file and if you write to zstd compressed output.
 
 ### I/O
 
