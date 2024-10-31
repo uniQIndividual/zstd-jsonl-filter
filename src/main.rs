@@ -1,16 +1,11 @@
 use std::error::Error;
-use std::ffi::c_float;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Error as IoError, Lines, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Error as IoError, ErrorKind, Lines, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicU64;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::{fs, u64};
-use std::{process, usize};
+use std::{fs, process, u64, usize};
 
 use clap::Parser;
 use colored::*;
@@ -126,7 +121,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Create progress bar
     let bar_width = match terminal_size() {
-        Some((Width(w), _)) => w as usize - 48,
+        Some((Width(w), _)) => w as usize - 50,
         None => 40,
     };
     let pb = ProgressBar::new(zstd_files.len() as u64);
@@ -257,19 +252,40 @@ fn read_lines(
 
     let pattern = Regex::new(&config.pattern.as_str()).unwrap(); //unwrap because already verified
 
-    let output_file = File::create(&output_file_path)?;
-    let mut writer = BufWriter::new(&output_file);
+    let output_file: Result<File, IoError> = if !config.no_write {
+        File::create(&output_file_path)
+    } else {
+        Err(IoError::new(ErrorKind::Other, "--no-write flag"))
+    };
+
+    let mut writer: Result<BufWriter<File>, IoError> = match output_file {
+        Ok(file) => {
+            let buf_writer = BufWriter::new(file);
+            Ok(buf_writer)
+        }
+        Err(_) => Err(IoError::new(ErrorKind::Other, "--no-write flag")),
+    };
 
     // Function to handle output either (compressed or uncompressed)
     let mut write_to_output = |data: &[u8]| -> std::io::Result<()> {
         if config.zstd {
             // Use a ZSTD encoder to write compressed data
-            let mut encoder = Encoder::new(writer.by_ref(), config.compression_level)?;
-            encoder.write_all(data)?;
-            encoder.finish()?;
+            match writer {
+                Ok(ref mut writer) => {
+                    let mut encoder = Encoder::new(writer.by_ref(), config.compression_level)?;
+                    encoder.write_all(data)?;
+                    encoder.finish()?;
+                }
+                Err(_) => {}
+            }
         } else {
             // Write uncompressed data directly
-            writer.write_all(data)?;
+            match writer {
+                Ok(ref mut writer) => {
+                    writer.write_all(data)?;
+                }
+                Err(_) => {}
+            }
         }
         Ok(())
     };
@@ -461,7 +477,7 @@ fn start_progress_updater(
     start_time: Instant,
     global_to_be_processed_size: &Arc<AtomicU64>,
     pb: ProgressBar,
-    config: &Config,
+    _config: &Config,
     global_decompressed_size: &Arc<AtomicUsize>,
     global_decompressed_lines: &Arc<AtomicUsize>,
     global_filtered_lines: &Arc<AtomicUsize>,
@@ -497,7 +513,7 @@ fn start_progress_updater(
         let process = sys.process(pid).unwrap();
 
         // Fetch CPU, memory, and I/O stats
-        let cpu_usage = process.cpu_usage() / sys.cpus().len() as c_float;
+        let cpu_usage = process.cpu_usage() / sys.cpus().len() as f32;
         let mut cpu_usage_string = cpu_usage.to_string();
         if cpu_usage < 10 as f32 {
             cpu_usage_string.insert_str(0, " ");
@@ -528,9 +544,11 @@ fn start_progress_updater(
         let line_speed = format!("{:.0} lines/s", global_decompressed_lines as f64 / elapsed);
         let line_speed_len = line_speed.chars().count();
         let remaining_compressed_data = global_to_be_processed_size - processed_size_estimate;
-        
 
-        let remaining_time = HumanDuration(Duration::new((remaining_compressed_data as f64 / (disk_usage_reads as f64)) as u64, 0));
+        let remaining_time = HumanDuration(Duration::new(
+            (remaining_compressed_data as f64 / (disk_usage_reads as f64)) as u64,
+            0,
+        ));
 
         let remaining_percentage_string = {
             if global_decompressed_lines == 0 {
@@ -559,7 +577,13 @@ fn start_progress_updater(
             }
         }
 
-        let too_long = cpu_usage_string_len + memory_usage_len + line_speed_len + processed_size_estimate_string_len + global_to_be_processed_size_string_len + remaining_percentage_string_len + 43;
+        let too_long = cpu_usage_string_len
+            + memory_usage_len
+            + line_speed_len
+            + processed_size_estimate_string_len
+            + global_to_be_processed_size_string_len
+            + remaining_percentage_string_len
+            + 43;
 
         pb.set_message(format!(
             "({} remaining)\nCPU: {}{}Memory: {}{}Speed: {}{}Progress: {}/{} ({}){}I/O Reads: {} | I/O Writes: {}\nDecompressed: {} ({})\nKept/Total Lines: {}/{} ({})",
