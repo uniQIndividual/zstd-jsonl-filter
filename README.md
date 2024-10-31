@@ -4,7 +4,7 @@ zstd-jsonl-filter takes advantage of zstd's incredibly high decompression speed 
 
 <br>
 <p align="center">
-<img src="https://github.com/user-attachments/assets/3c545b26-f4b5-4cef-a4fa-99e494611eb5" width="80%"/>
+<img src="https://github.com/user-attachments/assets/6a37abc9-2c06-4f69-aa75-96f2c732c2a3" width="80%"/>
 </p>
 
 
