@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Error as IoError, ErrorKind, Lines, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Error as IoError, Lines, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -252,18 +252,30 @@ fn read_lines(
 
     let pattern = Regex::new(&config.pattern.as_str()).unwrap(); //unwrap because already verified
 
-    let output_file: Result<File, IoError> = if !config.no_write {
-        File::create(&output_file_path)
+    let output_file = if !config.no_write {
+        let out = File::create(&output_file_path);
+        if out.is_err() {
+            pb.suspend(|| {
+                print_if_not_quiet(
+                    config.quiet,
+                    &format!(
+                        "Unable to create output file {:?}",
+                        Path::new(&output_file_path).file_name().unwrap_or_default()
+                    ),
+                );
+            });
+        }
+        out.ok()
     } else {
-        Err(IoError::new(ErrorKind::Other, "--no-write flag"))
+        None
     };
 
-    let mut writer: Result<BufWriter<File>, IoError> = match output_file {
-        Ok(file) => {
+    let mut writer= match output_file {
+        Some(file) => {
             let buf_writer = BufWriter::new(file);
-            Ok(buf_writer)
-        }
-        Err(_) => Err(IoError::new(ErrorKind::Other, "--no-write flag")),
+            Some(buf_writer)
+        },
+        None  => None,
     };
 
     // Function to handle output either (compressed or uncompressed)
@@ -271,20 +283,20 @@ fn read_lines(
         if config.zstd {
             // Use a ZSTD encoder to write compressed data
             match writer {
-                Ok(ref mut writer) => {
+                Some(ref mut writer) => {
                     let mut encoder = Encoder::new(writer.by_ref(), config.compression_level)?;
                     encoder.write_all(data)?;
                     encoder.finish()?;
                 }
-                Err(_) => {}
+                None => {}
             }
         } else {
             // Write uncompressed data directly
             match writer {
-                Ok(ref mut writer) => {
+                Some(ref mut writer) => {
                     writer.write_all(data)?;
                 }
-                Err(_) => {}
+                None => {}
             }
         }
         Ok(())
