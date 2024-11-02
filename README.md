@@ -67,15 +67,15 @@ Created files will follow the structure ``{output_path}original_filename_without
 | ------------- | ------------- | ------------- |
 | ``--config`` | Point zstd-jsonl-filter to the config file. | ``config.toml`` in the same folder |
 | ``--input`` | The path where your .zst files are located.<br>Both ``/`` slashes and ``\`` backslashes work. It is also possible to point to a single file. | ``./`` current folder
-| ``--output`` | Where the output files should be stored. | ``./`` current folder. |
-| ``--zstd`` | Whether the output should be stored as a compressed .zst file. | ``false`` no zstd compression. |
-| ``--compression-level`` | The zstd compression level from 1 (fastest) to 22 (smallest) | ``0`` use zstd default |
+| ``--output`` | Where the output files should be stored. | ``./`` current folder |
+| ``--zstd`` | Whether the output should be stored as a compressed .zst file. | ``false`` no zstd compression |
+| ``--compression-level`` | The zstd compression level from 1 (fastest) to 22 (smallest). | ``0`` use zstd default |
 | ``--suffix`` | Name to be appended to output files. Will generate e.g.<br>``12000000000-12010000000_filtered.zst``. | ``_filtered`` |
-| ``--file-extension`` | If you want to replace the file extension for output files. You can usually leave this empty, otherwise do not include a dot i.e. ``jsonl`` | ``""`` |
-| ``--pattern`` | The regex pattern to be applied line-by-line. A match means the line will be included in the output. Keep in mind that regex terms with special characters need to be escaped properly. Look-around are not supported in favor of a worst case performance of [O(m * n)](https://docs.rs/regex/latest/regex/). | ``^`` matches everything |
+| ``--file-extension`` | If you want to replace the file extension for output files. You can usually leave this empty, otherwise do not include a dot i.e. ``jsonl``. | ``""`` |
+| ``--pattern`` | The regex pattern to be applied line-by-line. A match means the line will be included in the output. Keep in mind that regex terms with special characters need to be escaped properly. Look-around are not supported in favor of a worst case performance of [O(m * n)](https://docs.rs/regex/latest/regex/). Also note [the impact of regex patterns on your performance](https://docs.rs/regex/latest/regex/#performance). | ``^`` matches everything |
 | ``--threads`` | The maximum number of threads used by rayon. Since each thread reads from one file, changing this number also affects I/O.  | ``0`` unlimited |
 | ``--buffer`` | The maximum buffer per thread before matches lines are written to disk. | ``4096`` 4KiB |
-|``--quiet``| Displays only the current progress and error messages | ``false`` |
+|``--quiet``| Displays only the current progress and error messages. | ``false`` |
 |``--no-write``| Does not write any output files. Can be used for testing or line counting. It will check for already existing output files so you can spot conflicts before running long tasks. | ``false`` |
 
 ## Practical examples
@@ -136,7 +136,7 @@ Matching is performed via regex because it was significantly faster than parsing
 
 ### Memory
 
-Stream decompression drastically reduces the memory usage. For my test set the usage sits around 200 MB. However the exact value depends on several factors like the size of a single line in your decompressed file and if you write to zstd compressed output.
+Stream decompression drastically reduces the memory usage. For my test set the usage sits around 200 MB. However the exact value depends on several factors like the size of a single line in your decompressed file and if you write to zstd compressed output.  Also note [the impact of regex patterns on your performance](https://docs.rs/regex/latest/regex/#performance).
 
 ### I/O
 
