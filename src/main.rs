@@ -194,6 +194,7 @@ fn read_lines(
 ) -> std::io::Result<()> {
     // Operates on a single zstd file decompressing it line by line
     let filesize;
+    
     // Skip if input file is empty
     if let Ok(metadata) = fs::metadata(input_file_path) {
         if metadata.len() == 0 {
@@ -250,7 +251,7 @@ fn read_lines(
     // Track the last matching line to avoid trailing newline
     let mut last_matching_line: Option<String> = None;
 
-    let pattern = Regex::new(&config.pattern.as_str()).unwrap(); //unwrap because already verified
+    let pattern = Regex::new(&config.pattern.as_str()).unwrap(); //unwrap because already verified //TODO: move
 
     let output_file = if !config.no_write {
         let out = File::create(&output_file_path);
@@ -728,10 +729,15 @@ fn set_config() -> Config {
         .unwrap_or_else(|| fallback_input);
 
     // Output path
-    let output = cli
+    let mut output = cli
         .output
         .or_else(|| Some(config.as_ref()?.output.clone()))
         .unwrap_or_else(|| fallback_output);
+
+    // Enforce ending with a slash
+    if !output.ends_with("/") {
+        output += "/";
+    }
 
     // Use zstd compression in output
     let zstd = cli.zstd
