@@ -121,7 +121,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Create progress bar
     let bar_width = match terminal_size() {
-        Some((Width(w), _)) => w as usize - 50,
+        Some((Width(w), _)) => w as usize - 52,
         None => 40,
     };
     let pb = ProgressBar::new(zstd_files.len() as u64);

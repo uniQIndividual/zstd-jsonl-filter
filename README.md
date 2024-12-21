@@ -96,20 +96,20 @@ zstd = false
 compression_level = 0
 
 # Regex Filter
-pattern = '","mode":62,"' # Make sure to properly escape if needed, look-arounds are not supported
+pattern = ',"mode":62,' # Make sure to properly escape if needed, look-arounds are not supported
 
 # Performance
 threads = 0
 buffer = 4096
 quiet = false
 ```
-This finds all Team Scorched matches in Destiny PGCRs by identifying ``","mode":62,"``. Make sure your source files are well defined and your regex terms are robust enough. Given a file named ``{file}.jsonl.zst`` it then writes the output to uncompressed files called ``{file}_scorch.jsonl``. 
+This finds all Team Scorched matches in Destiny PGCRs by identifying ``,"mode":62,``. Make sure your source files are well defined and your regex terms are robust enough. Given a file named ``{file}.jsonl.zst`` it then writes the output to uncompressed files called ``{file}_scorch.jsonl``. 
 
 ### Using arguments
 ```powershell
-.\zstd-jsonl-filter.exe --input "\\10.0.0.2\D2_PGCR\bungo-pgcr-12b" --output "C:\Users\User\Documents\Destiny_PGCR\test" --zstd --compression-level 14 --threads 2 --pattern '","mode":62,"' --quiet
+.\zstd-jsonl-filter.exe --input "\\10.0.0.2\D2_PGCR\bungo-pgcr-12b" --output "C:\Users\User\Documents\Destiny_PGCR\test" --zstd --compression-level 14 --threads 2 --pattern ',"mode":62,' --quiet
 ```
-This examples also finds all Team Scorched matches with ``","mode":62,"`` in the network share ``\\10.0.0.2\D2_PGCR\bungo-pgcr-12b`` and writes the output to compressed files called ``{file}_filtered.zst``. It is restricted to only ``2`` threads and with ``--quiet`` it will only display the current progress and important error messages.
+This examples also finds all Team Scorched matches with ``,"mode":62,`` in the network share ``\\10.0.0.2\D2_PGCR\bungo-pgcr-12b`` and writes the output to compressed files called ``{file}_filtered.zst``. It is restricted to only ``2`` threads and with ``--quiet`` it will only display the current progress and important error messages.
 
 Without arguments or ``config.toml`` zstd-jsonl-filter will default back to extracting every .zst archive in the current directory without filtering any lines.
 
