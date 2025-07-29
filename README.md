@@ -75,6 +75,7 @@ Created files will follow the structure ``{output_path}original_filename_without
 | ``--pattern`` | The regex pattern to be applied line-by-line. A match means the line will be included in the output. Keep in mind that regex terms with special characters need to be escaped properly. Look-around are not supported in favor of a worst case performance of [O(m * n)](https://docs.rs/regex/latest/regex/). Also note [the impact of regex patterns on your performance](https://docs.rs/regex/latest/regex/#performance). | ``^`` matches everything |
 | ``--threads`` | The maximum number of threads used by rayon. Since each thread reads from one file, changing this number also affects I/O.  | ``0`` unlimited |
 | ``--buffer`` | The maximum buffer per thread before matches lines are written to disk. | ``4096`` 4KiB |
+| ``--window-log-max`` | $\text{log}_2$ bytes as the maximum window size for zstd decoding (equivalent to --long parameter in zstd). | ``27`` ($2^{27}$ bytes $\approx$ 134MB) |
 |``--quiet``| Displays only the current progress and error messages. | ``false`` |
 |``--no-write``| Does not write any output files. Can be used for testing or line counting. It will check for already existing output files so you can spot conflicts before running long tasks. | ``false`` |
 
@@ -94,6 +95,7 @@ no_write = false
 # In this example we the output to be uncompressed thus we set zstd to false
 zstd = false
 compression_level = 0
+window_log_max = 27
 
 # Regex Filter
 pattern = ',"mode":62,' # Make sure to properly escape if needed, look-arounds are not supported
@@ -144,6 +146,10 @@ Although zstd-jsonl-filter is usually CPU bound when reading from an NVMe, that 
 
 Write speeds depend on how many entries are filtered, your storage speed and if compression is used.
 By default zstd-jsonl-filter writes to a 4 KiB buffer which you can adjust as needed.
+
+### Window log max
+
+Some zstd archives are compressed using large window sizes that exceed the default decompression limits. The `--window-log-max` parameter controls the maximum memory window size used during zstd decompression; it is equivalent to `--long` in zstd. Increase this value if you experience `"Frame requires too much memory for decoding"` errors.
 
 # Donate
 
