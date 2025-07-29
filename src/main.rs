@@ -665,7 +665,7 @@ struct Cli {
     quiet: bool,
     #[arg(long = "config", default_value = "config.toml")]
     config: String,
-    #[arg(long = "window-log-max", help = "Maximum window log size for zstd decoding (equivalent to --long parameter)", default_value = "27")]
+    #[arg(long = "window-log-max", help = "Maximum window log size for zstd decoding (equivalent to --long parameter)")]
     window_log_max: Option<u32>,
 }
 
@@ -806,7 +806,7 @@ fn set_config() -> Config {
     let window_log_max = cli
         .window_log_max
         .or_else(|| config.as_ref().map(|c| c.window_log_max))
-        .unwrap_or_else(|| fallback_window_log_max);
+        .unwrap_or(fallback_window_log_max);
 
     // Validate the regex pattern.
     let _ = match validate_regex(&pattern) {
