@@ -311,7 +311,9 @@ fn read_lines(
     }
     let file = File::open(input_file_path)?;
 
-    let decoder = Decoder::new(file)?;
+    // Create decoder with custom window log max
+    let mut decoder = Decoder::new(file)?;
+    decoder.window_log_max(config.window_log_max)?;
     let reader = BufReader::new(decoder);
 
     // Measure the size of decompressed data
@@ -663,6 +665,8 @@ struct Cli {
     quiet: bool,
     #[arg(long = "config", default_value = "config.toml")]
     config: String,
+    #[arg(long = "window-log-max", help = "Maximum window log size for zstd decoding (equivalent to --long parameter)")]
+    window_log_max: Option<u32>,
 }
 
 // Internal and config.toml structure
@@ -679,6 +683,7 @@ struct Config {
     buffer: usize,
     no_write: bool,
     quiet: bool,
+    window_log_max: u32,
 }
 
 fn validate_regex(pattern: &str) -> Result<Regex, String> {
@@ -705,6 +710,7 @@ fn set_config() -> Config {
     let fallback_buffer = 4096; // the buffer size after which data is written to disk, here: 4KiB
     let fallback_no_write = false; // do not write to output
     let fallback_quiet = false;
+    let fallback_window_log_max = 27; // Default window log max (equivalent to zstd default)
 
     // Parse command-line arguments.
     let cli = Cli::parse();
@@ -796,6 +802,12 @@ fn set_config() -> Config {
             .and_then(|c| Some(c.quiet))
             .unwrap_or(fallback_quiet);
 
+    // Window log max for zstd decoding
+    let window_log_max = cli
+        .window_log_max
+        .or_else(|| config.as_ref().map(|c| c.window_log_max))
+        .unwrap_or(fallback_window_log_max);
+
     // Validate the regex pattern.
     let _ = match validate_regex(&pattern) {
         Ok(r) => r,
@@ -824,5 +836,6 @@ fn set_config() -> Config {
         buffer: buffer,
         no_write: no_write,
         quiet: quiet,
+        window_log_max: window_log_max,
     }
 }
