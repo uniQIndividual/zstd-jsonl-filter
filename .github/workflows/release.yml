@@ -9,22 +9,70 @@ jobs:
   release:
     name: release ${{ matrix.target }}
     permissions: write-all
-    runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         include:
-          - target: x86_64-pc-windows-gnu
-            archive: zip
-          - target: x86_64-unknown-linux-musl
-            archive: tar.gz tar.xz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+            archive_cmd: tar -czvf
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive_ext: tar.gz
+            archive_cmd: tar -czvf
+          - os: windows-latest
+            target: x86_64-pc-windows-gnu 
+            archive_ext: zip
+            archive_cmd: powershell Compress-Archive
+
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@master
-      - name: Compile and release
-        uses: rust-build/rust-build.action@v1.4.5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 
+
+      - name: Set up Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy,rustfmt
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Create packaging folder
+        run: |
+          mkdir package
+          cp config.toml package/
+          cp target/${{ matrix.target }}/release/${{ github.event.repository.name }}* package/
+
+      - name: Create archive
+        id: archive
+        run: |
+          cd package
+          if [[ "${{ matrix.archive_ext }}" == "zip" ]]; then
+            # Zip with Powershell
+            powershell -Command "Compress-Archive -Path * -DestinationPath ../${{ github.event.repository.name }}-${{ matrix.target }}.${{ matrix.archive_ext }}"
+          else
+            # For tar.gz
+            tar -czvf ../${{ github.event.repository.name }}-${{ matrix.target }}.${{ matrix.archive_ext }} *
+          fi
+
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-${{ matrix.target }}
+          path: ${{ github.event.repository.name }}-${{ matrix.target }}.${{ matrix.archive_ext }}
+          retention-days: 30
+
+      - name: Attach archive to Release
+        if: success()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          RUSTTARGET: ${{ matrix.target }}
-          ARCHIVE_TYPES: ${{ matrix.archive }}
-          EXTRA_FILES: "README.md LICENSE config.toml"
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            "${{ github.event.repository.name }}-${{ matrix.target }}.${{ matrix.archive_ext }}" \
+            --repo "${{ github.repository }}" \
+            --clobber
