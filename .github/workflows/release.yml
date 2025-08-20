@@ -56,11 +56,12 @@ jobs:
 
       - name: Create archive
         id: archive
+        shell: bash
         run: |
           cd package
           if [[ "${{ matrix.archive_ext }}" == "zip" ]]; then
             # Zip with Powershell
-            powershell -Command "Compress-Archive -Path * -DestinationPath ../${{ github.event.repository.name }}-${{ matrix.target }}.${{ matrix.archive_ext }}"
+            pwsh -Command "Compress-Archive -Path * -DestinationPath ../${{ github.event.repository.name }}-${{ matrix.target }}.${{ matrix.archive_ext }}"
           else
             # For tar.gz
             tar -czvf ../${{ github.event.repository.name }}-${{ matrix.target }}.${{ matrix.archive_ext }} *
