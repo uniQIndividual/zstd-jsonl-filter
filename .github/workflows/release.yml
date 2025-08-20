@@ -1,5 +1,5 @@
 # .github/workflows/release.yml
-name: Compile and Release
+name: Build and Release
 
 on:
   release:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       test-mode:
-        description: "Compile only"
+        description: "Build only"
         required: false
         default: "false"
 
@@ -48,11 +48,36 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Create packaging folder
+      - name: Collect files
+        id: collect
         run: |
-          mkdir package
-          cp config.toml package/
-          cp target/${{ matrix.target }}/release/${{ github.event.repository.name }}* package/
+          # Determine the binary name (same as repo name)
+          BIN_NAME="${{ github.event.repository.name }}"
+          # On Windows the binary ends with .exe
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            BIN_NAME="${BIN_NAME}.exe"
+          fi
+
+          # Path to the compiled binary
+          BIN_PATH="target/${{ matrix.target }}/release/${BIN_NAME}"
+
+          # Verify the binary exists
+          if [[ ! -f "$BIN_PATH" ]]; then
+            echo "::error::Binary not found at $BIN_PATH"
+            exit 1
+          fi
+
+          # Create a temporary staging directory (outside of any archive)
+          STAGE_DIR="${{ runner.temp }}/stage-${{ matrix.target }}"
+          mkdir -p "$STAGE_DIR"
+
+          # Copy ONLY the binary and config.toml (no *.d files)
+          cp "$BIN_PATH" "$STAGE_DIR/"
+          cp config.toml "$STAGE_DIR/"
+
+          # Export the stage path for later steps
+          echo "stage_dir=$STAGE_DIR" >> $GITHUB_OUTPUT
+          echo "binary_name=$BIN_NAME" >> $GITHUB_OUTPUT
 
       - name: Create archive
         id: archive
