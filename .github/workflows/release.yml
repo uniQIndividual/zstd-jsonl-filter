@@ -4,6 +4,12 @@ name: Compile and Release
 on:
   release:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      test-mode:
+        description: "Run the workflow in manually"
+        required: false
+        default: "false"
 
 jobs:
   release:
