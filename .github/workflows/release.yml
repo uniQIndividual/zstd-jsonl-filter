@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       test-mode:
-        description: "Run the workflow in manually"
+        description: "Compile only"
         required: false
         default: "false"
 
@@ -28,7 +28,7 @@ jobs:
             archive_ext: tar.gz
             archive_cmd: tar -czvf
           - os: windows-latest
-            target: x86_64-pc-windows-gnu 
+            target: x86_64-pc-windows-gnu
             archive_ext: zip
             archive_cmd: powershell Compress-Archive
 
@@ -43,7 +43,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy,rustfmt
-          targets: ${{ matrix.target }}
+          target: ${{ matrix.target }}
 
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
@@ -74,7 +74,7 @@ jobs:
           retention-days: 30
 
       - name: Attach archive to Release
-        if: success()
+        if: success() && inputs.test-mode != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
