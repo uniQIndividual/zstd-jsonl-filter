@@ -50,6 +50,7 @@ jobs:
 
       - name: Collect files
         id: collect
+        shell: bash
         run: |
           # Determine the binary name (same as repo name)
           BIN_NAME="${{ github.event.repository.name }}"
@@ -79,33 +80,29 @@ jobs:
           echo "stage_dir=$STAGE_DIR" >> $GITHUB_OUTPUT
           echo "binary_name=$BIN_NAME" >> $GITHUB_OUTPUT
 
-
-      # ---------- Linux/macOS ----------
-      - name: Create archive (Linux/macOS)
-        if: runner.os != 'Windows'
-        id: archive_unix
+      - name: Create archive
+        id: archive
+        shell: bash
         run: |
           STAGE="${{ steps.collect.outputs.stage_dir }}"
           OUT_NAME="${{ github.event.repository.name }}-${{ matrix.target }}.${{ matrix.archive_ext }}"
-          tar -czvf "${OUT_NAME}" -C "${STAGE}" .
-          echo "archive_path=${OUT_NAME}" >> $GITHUB_OUTPUT
 
-      # ---------- Windows ----------
-      - name: Create archive (Windows)
-        if: runner.os == 'Windows'
-        id: archive_win
-        shell: pwsh
-        run: |
-          $stage   = "${{ steps.collect.outputs.stage_dir }}"
-          $outName = "${{ github.event.repository.name }}-${{ matrix.target }}.${{ matrix.archive_ext }}"
-          Compress-Archive -Path "$stage\*" -DestinationPath $outName
-          "archive_path=$outName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          if [[ "${{ matrix.archive_ext }}" == "zip" ]]; then
+            # Zip with Powershell
+            pwsh -Command "Compress-Archive -Path '${STAGE}\\*' -DestinationPath '${OUT_NAME}'"
+          else
+            # For tar.gz
+            tar -czvf "${OUT_NAME}" -C "${STAGE}" .
+          fi
+
+          # Export the archive path for later steps
+          echo "archive_path=${OUT_NAME}" >> $GITHUB_OUTPUT
 
       - name: Upload archive artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ github.event.repository.name }}-${{ matrix.target }}
-          path: ${{ steps.archive_unix.outputs.archive_path || steps.archive_win.outputs.archive_path }}
+          path: ${{ steps.archive.outputs.archive_path }}
           retention-days: 30
 
       - name: Attach archive to Release
@@ -113,7 +110,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ARCHIVE="${{ steps.archive_unix.outputs.archive_path || steps.archive_win.outputs.archive_path }}"
-          gh release upload "${{ github.ref_name }}" "$ARCHIVE" \
+          gh release upload "${{ github.ref_name }}" \
+            "${{ steps.archive.outputs.archive_path }}" \
             --repo "${{ github.repository }}" \
             --clobber
