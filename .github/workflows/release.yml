@@ -105,7 +105,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ github.event.repository.name }}-${{ matrix.target }}
-          path: ${{ steps.archive.outputs.archive_path }}
+          path: ${{ steps.archive_unix.outputs.archive_path || steps.archive_win.outputs.archive_path }}
           retention-days: 30
 
       - name: Attach archive to Release
@@ -113,7 +113,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ github.ref_name }}" \
-            "${{ steps.archive.outputs.archive_path }}" \
+          ARCHIVE="${{ steps.archive_unix.outputs.archive_path || steps.archive_win.outputs.archive_path }}"
+          gh release upload "${{ github.ref_name }}" "$ARCHIVE" \
             --repo "${{ github.repository }}" \
             --clobber
