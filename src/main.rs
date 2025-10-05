@@ -843,3 +843,88 @@ fn set_config() -> Config {
         window_log_max: window_log_max,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_config(file_extension: &str, zstd: bool, suffix: &str, output: &str) -> Config {
+        Config {
+            input: String::from("./input/"),
+            output: String::from(output),
+            zstd,
+            compression_level: 3,
+            suffix: String::from(suffix),
+            file_extension: String::from(file_extension),
+            pattern: String::from("^"),
+            threads: 0,
+            buffer: 4096,
+            no_write: false,
+            quiet: false,
+            window_log_max: 27,
+        }
+    }
+
+    #[test]
+    fn test_output_filename_zst_without_jsonl_default_extension() {
+        let config = create_test_config("", false, "_filtered", "./output/");
+        let result = generate_output_filename("./input/file1.zst", &config);
+        assert_eq!(result, "./output/file1_filtered.jsonl");
+    }
+
+    #[test]
+    fn test_output_filename_jsonl_zst_default_extension() {
+        let config = create_test_config("", false, "_filtered", "./output/");
+        let result = generate_output_filename("./input/file2.jsonl.zst", &config);
+        assert_eq!(result, "./output/file2_filtered.jsonl");
+    }
+
+    #[test]
+    fn test_output_filename_zst_without_jsonl_compressed_output() {
+        let config = create_test_config("", true, "_filtered", "./output/");
+        let result = generate_output_filename("./input/file1.zst", &config);
+        assert_eq!(result, "./output/file1_filtered.jsonl.zst");
+    }
+
+    #[test]
+    fn test_output_filename_jsonl_zst_compressed_output() {
+        let config = create_test_config("", true, "_filtered", "./output/");
+        let result = generate_output_filename("./input/file2.jsonl.zst", &config);
+        assert_eq!(result, "./output/file2_filtered.jsonl.zst");
+    }
+
+    #[test]
+    fn test_output_filename_custom_extension() {
+        let config = create_test_config("txt", false, "_filtered", "./output/");
+        let result = generate_output_filename("./input/file1.zst", &config);
+        assert_eq!(result, "./output/file1_filtered.txt");
+    }
+
+    #[test]
+    fn test_output_filename_custom_extension_compressed() {
+        let config = create_test_config("txt", true, "_filtered", "./output/");
+        let result = generate_output_filename("./input/file1.zst", &config);
+        assert_eq!(result, "./output/file1_filtered.txt.zst");
+    }
+
+    #[test]
+    fn test_output_filename_custom_extension_jsonl_input() {
+        let config = create_test_config("txt", false, "_filtered", "./output/");
+        let result = generate_output_filename("./input/file2.jsonl.zst", &config);
+        assert_eq!(result, "./output/file2_filtered.txt");
+    }
+
+    #[test]
+    fn test_output_filename_no_suffix() {
+        let config = create_test_config("", false, "", "./output/");
+        let result = generate_output_filename("./input/data-archive.zst", &config);
+        assert_eq!(result, "./output/data-archive.jsonl");
+    }
+
+    #[test]
+    fn test_output_filename_different_output_dir() {
+        let config = create_test_config("", false, "_filtered", "./custom-output/");
+        let result = generate_output_filename("./input/file1.zst", &config);
+        assert_eq!(result, "./custom-output/file1_filtered.jsonl");
+    }
+}
