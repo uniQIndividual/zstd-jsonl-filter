@@ -194,7 +194,7 @@ fn read_lines(
 ) -> std::io::Result<()> {
     // Operates on a single zstd file decompressing it line by line
     let filesize;
-    
+
     // Skip if input file is empty
     if let Ok(metadata) = fs::metadata(input_file_path) {
         if metadata.len() == 0 {
@@ -419,7 +419,7 @@ fn flush_buffer(
 fn generate_output_filename(input_file_path: &str, config: &Config) -> String {
     let path = Path::new(input_file_path);
 
-    // Strip the ".jsonl.zst" extension
+    // Strip the ".zst" extension
     let input_stem = path
         .file_stem()
         .unwrap_or_default()
@@ -438,7 +438,11 @@ fn generate_output_filename(input_file_path: &str, config: &Config) -> String {
 
     let output_file_extention = {
         if config.file_extension.is_empty() {
-            format!(".{}", original_file_extension)
+            if original_file_extension.is_empty() {
+                String::from(".jsonl")
+            } else {
+                format!(".{}", original_file_extension)
+            }
         } else {
             format!(".{}", config.file_extension)
         }
