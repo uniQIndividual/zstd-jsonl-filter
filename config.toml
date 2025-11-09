@@ -2,10 +2,10 @@
 # Check https://github.com/uniQIndividual/zstd-jsonl-filter for the documentation
 
 # Input Parameters
-input = './'
+input = "./"
 
 # Output Parameters
-output = './'
+output = "./"
 suffix = "_filtered"
 file_extension = ""
 no_write = false
@@ -13,9 +13,10 @@ no_write = false
 # Output as zstd?
 zstd = false
 compression_level = 0
+window_log_max = 27
 
 # Regex Filter
-pattern = '^'
+pattern = "^"
 
 # Performance
 threads = 0

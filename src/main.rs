@@ -194,7 +194,7 @@ fn read_lines(
 ) -> std::io::Result<()> {
     // Operates on a single zstd file decompressing it line by line
     let filesize;
-    
+
     // Skip if input file is empty
     if let Ok(metadata) = fs::metadata(input_file_path) {
         if metadata.len() == 0 {
@@ -419,7 +419,7 @@ fn flush_buffer(
 fn generate_output_filename(input_file_path: &str, config: &Config) -> String {
     let path = Path::new(input_file_path);
 
-    // Strip the ".jsonl.zst" extension
+    // Strip the ".zst" extension
     let input_stem = path
         .file_stem()
         .unwrap_or_default()
@@ -438,7 +438,11 @@ fn generate_output_filename(input_file_path: &str, config: &Config) -> String {
 
     let output_file_extention = {
         if config.file_extension.is_empty() {
-            format!(".{}", original_file_extension)
+            if original_file_extension.is_empty() {
+                String::from("")
+            } else {
+                format!(".{}", original_file_extension)
+            }
         } else {
             format!(".{}", config.file_extension)
         }
@@ -701,7 +705,7 @@ fn set_config() -> Config {
     // Fallback values if no config file was found
     let fallback_input = String::from("./"); // directory where to search for zstd files
     let fallback_output = String::from("./"); // directory where to write files to
-    let fallback_zstd = false; // by default extract everything
+    let fallback_zstd = false; // whether to zstd compress output
     let fallback_compression_level = 0; // zstd compression level between 1-22, 0 means the default of 3
     let fallback_suffix = String::from("_filtered"); // suffix for your output file
     let fallback_file_extension = String::from(""); // file extension for your output file
@@ -710,7 +714,7 @@ fn set_config() -> Config {
     let fallback_buffer = 4096; // the buffer size after which data is written to disk, here: 4KiB
     let fallback_no_write = false; // do not write to output
     let fallback_quiet = false;
-    let fallback_window_log_max = 27; // Default window log max (equivalent to zstd default)
+    let fallback_window_log_max = 27; // maximum window size for zstd decoding (equivalent to zstd default)
 
     // Parse command-line arguments.
     let cli = Cli::parse();
@@ -837,5 +841,90 @@ fn set_config() -> Config {
         no_write: no_write,
         quiet: quiet,
         window_log_max: window_log_max,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_config(file_extension: &str, zstd: bool, suffix: &str, output: &str) -> Config {
+        Config {
+            input: String::from("./input/"),
+            output: String::from(output),
+            zstd,
+            compression_level: 3,
+            suffix: String::from(suffix),
+            file_extension: String::from(file_extension),
+            pattern: String::from("^"),
+            threads: 0,
+            buffer: 4096,
+            no_write: false,
+            quiet: false,
+            window_log_max: 27,
+        }
+    }
+
+    #[test]
+    fn test_output_filename_zst_without_jsonl_default_extension() {
+        let config = create_test_config("", false, "_filtered", "./output/");
+        let result = generate_output_filename("./input/file1.zst", &config);
+        assert_eq!(result, "./output/file1_filtered");
+    }
+
+    #[test]
+    fn test_output_filename_jsonl_zst_default_extension() {
+        let config = create_test_config("", false, "_filtered", "./output/");
+        let result = generate_output_filename("./input/file2.jsonl.zst", &config);
+        assert_eq!(result, "./output/file2_filtered.jsonl");
+    }
+
+    #[test]
+    fn test_output_filename_zst_without_jsonl_compressed_output() {
+        let config = create_test_config("", true, "_filtered", "./output/");
+        let result = generate_output_filename("./input/file1.zst", &config);
+        assert_eq!(result, "./output/file1_filtered.zst");
+    }
+
+    #[test]
+    fn test_output_filename_jsonl_zst_compressed_output() {
+        let config = create_test_config("", true, "_filtered", "./output/");
+        let result = generate_output_filename("./input/file2.jsonl.zst", &config);
+        assert_eq!(result, "./output/file2_filtered.jsonl.zst");
+    }
+
+    #[test]
+    fn test_output_filename_custom_extension() {
+        let config = create_test_config("txt", false, "_filtered", "./output/");
+        let result = generate_output_filename("./input/file1.zst", &config);
+        assert_eq!(result, "./output/file1_filtered.txt");
+    }
+
+    #[test]
+    fn test_output_filename_custom_extension_compressed() {
+        let config = create_test_config("txt", true, "_filtered", "./output/");
+        let result = generate_output_filename("./input/file1.zst", &config);
+        assert_eq!(result, "./output/file1_filtered.txt.zst");
+    }
+
+    #[test]
+    fn test_output_filename_custom_extension_jsonl_input() {
+        let config = create_test_config("txt", false, "_filtered", "./output/");
+        let result = generate_output_filename("./input/file2.jsonl.zst", &config);
+        assert_eq!(result, "./output/file2_filtered.txt");
+    }
+
+    #[test]
+    fn test_output_filename_no_suffix() {
+        let config = create_test_config("", false, "", "./output/");
+        let result = generate_output_filename("./input/data-archive.zst", &config);
+        assert_eq!(result, "./output/data-archive");
+    }
+
+    #[test]
+    fn test_output_filename_different_output_dir() {
+        let config = create_test_config("", false, "_filtered", "./custom-output/");
+        let result = generate_output_filename("./input/file1.zst", &config);
+        assert_eq!(result, "./custom-output/file1_filtered");
     }
 }
