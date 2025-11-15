@@ -9,9 +9,9 @@ use std::{fs, process, u64, usize};
 
 use clap::Parser;
 use colored::*;
+use fancy_regex::Regex;
 use indicatif::{HumanBytes, HumanCount, HumanDuration, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sysinfo::System;
 use terminal_size::{terminal_size, Width};
@@ -271,12 +271,12 @@ fn read_lines(
         None
     };
 
-    let mut writer= match output_file {
+    let mut writer = match output_file {
         Some(file) => {
             let buf_writer = BufWriter::new(file);
             Some(buf_writer)
-        },
-        None  => None,
+        }
+        None => None,
     };
 
     // Function to handle output either (compressed or uncompressed)
@@ -328,26 +328,28 @@ fn read_lines(
                 line_counter += 1;
                 // Test regex pattern
                 // This is the place to add new line-by-line logic
-                if pattern.is_match(&line) {
-                    // Pattern matches
-                    line_filtered_counter += 1;
+                if pattern.is_match(&line).is_ok() {
+                    if pattern.is_match(&line).unwrap() {
+                        // Pattern matches
+                        line_filtered_counter += 1;
 
-                    if !config.no_write {
-                        // Skip if no output should be written
-                        flag_data_written = true;
+                        if !config.no_write {
+                            // Skip if no output should be written
+                            flag_data_written = true;
 
-                        // Write matches to buffer to decrease the number individual disk writes
-                        if let Some(last_line) = last_matching_line.take() {
-                            let line_bytes = format!("{}\n", last_line).into_bytes(); // Convert the line to bytes
-                            buffer.extend_from_slice(&line_bytes); // Append to the buffer
-                        }
+                            // Write matches to buffer to decrease the number individual disk writes
+                            if let Some(last_line) = last_matching_line.take() {
+                                let line_bytes = format!("{}\n", last_line).into_bytes(); // Convert the line to bytes
+                                buffer.extend_from_slice(&line_bytes); // Append to the buffer
+                            }
 
-                        // Store the current matching line as the last line
-                        last_matching_line = Some(line.to_string());
+                            // Store the current matching line as the last line
+                            last_matching_line = Some(line.to_string());
 
-                        // If the buffer size exceeds the limit, flush it to the output file
-                        if buffer.len() >= config.buffer {
-                            flush_buffer(&mut buffer, &mut write_to_output).unwrap();
+                            // If the buffer size exceeds the limit, flush it to the output file
+                            if buffer.len() >= config.buffer {
+                                flush_buffer(&mut buffer, &mut write_to_output).unwrap();
+                            }
                         }
                     }
                 }
@@ -669,7 +671,10 @@ struct Cli {
     quiet: bool,
     #[arg(long = "config", default_value = "config.toml")]
     config: String,
-    #[arg(long = "window-log-max", help = "Maximum window log size for zstd decoding (equivalent to --long parameter)")]
+    #[arg(
+        long = "window-log-max",
+        help = "Maximum window log size for zstd decoding (equivalent to --long parameter)"
+    )]
     window_log_max: Option<u32>,
 }
 
